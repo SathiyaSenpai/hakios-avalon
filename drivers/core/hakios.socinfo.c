@@ -44,8 +44,10 @@
 #include <pexpert/pexpert.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <vm/memory_types.h>
 
-extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+extern vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
+extern void ml_io_unmap(vm_offset_t addr, vm_size_t sz);
 extern void loader_log_putc(char c);
 
 SYSCTL_DECL(_kern_hakios);
@@ -216,6 +218,7 @@ static const struct { uint32_t id; const char *name; } known[] = {
 	{ 415, "SM8350" }, { 439, "SM8350" }, { 457, "SM8450" }, { 475, "SC7280 (SM7325, \"yupik\")" },
 	{ 487, "SC7280" }, { 497, "QCM6490" }, { 498, "QCS6490" }, { 483, "SM6350" }, { 434, "SM6350" },
 	{ 480, "SM7225" }, { 459, "SM7225" }, { 416, "SM8250" }, { 356, "SM8250" },
+	{ 632, "SM7675 (Snapdragon 7+ Gen 3)" },
 };
 
 static const char *
@@ -273,7 +276,13 @@ static int soc_subtype_value = -1;
 static int soc_foundry_value = -1;
 
 SYSCTL_INT(_kern_hakios, OID_AUTO, soc_id, CTLFLAG_RD | CTLFLAG_LOCKED, &soc_id_value, 0,
-    "the SoC's number in the firmware's table (475: SC7280/SM7325); -1: not read");
+    "the SoC's number in the firmware's table (632: SM7675 Cliffs); -1: not read");
+
+int
+hakios_soc_id(void)
+{
+	return soc_id_value;
+}
 SYSCTL_STRING(_kern_hakios, OID_AUTO, soc_name, CTLFLAG_RD | CTLFLAG_LOCKED, soc_name_text, 0, "the SoC's name, as this kernel knows that number");
 SYSCTL_INT(_kern_hakios, OID_AUTO, soc_revision, CTLFLAG_RD | CTLFLAG_LOCKED, &soc_revision_value, 0,
     "the chip revision, major << 16 | minor (0x10000 is 1.0)");
@@ -302,7 +311,7 @@ socinfo_init(void)
 		return;
 	}
 	smem_size = size;
-	smem = ml_io_map(pa, size);
+	smem = ml_io_map_unmappable(pa, size, VM_WIMG_IO);
 	if (smem == 0) {
 		say("socinfo: could not map %#x bytes at %#x\n", size, pa);
 		return;
@@ -311,10 +320,12 @@ socinfo_init(void)
 		say("socinfo: item %d is not in the shared memory at %#x (partition table magic %#x, legacy version word %#x)\n",
 		    SMEM_HW_SW_BUILD_ID, pa, le32(smem_size - 0x1000), le32(4 * 4 * 4 + 4 * LEGACY_SBL_VERSION));
 		list_items();
+		ml_io_unmap(smem, size);
 		return;
 	}
 	if (length < 56) {
 		say("socinfo: item %d is %llu bytes, too short for a socinfo structure\n", SMEM_HW_SW_BUILD_ID, (unsigned long long)length);
+		ml_io_unmap(smem, size);
 		return;
 	}
 	parse(offset, length);
@@ -332,5 +343,6 @@ socinfo_init(void)
 	    soc.hw_platform, soc.platform_version, soc.hw_subtype, soc.foundry, (unsigned long long)length, soc.build);
 	say("socinfo: raw id %u, raw version %#x; serial number ...%04x (all of it in kern.hakios.soc_serial)\n", soc.raw_id,
 	    soc.raw_version, soc.serial & 0xffff);
+	ml_io_unmap(smem, size);
 }
-STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, socinfo_init);
+STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, socinfo_init);

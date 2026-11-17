@@ -1552,7 +1552,18 @@ void
 hakios_goodix_init(void)
 {
 	uint32_t enabled = 0;
+	uint32_t soc_smem = 0;
+	char soc_arg[32] = { 0 };
 	thread_t thread;
+
+	extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+
+	if (PE_parse_boot_argn("soc_smem", &soc_smem, sizeof(soc_smem)) && soc_smem == 0x81d00000) {
+		return; /* Cliffs (OnePlus Nord 4) uses Synaptics S3910, not Goodix */
+	}
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return;
+	}
 
 	if (!PE_parse_boot_argn("touchscreen", &enabled, sizeof(enabled)) || !enabled) {
 		return;

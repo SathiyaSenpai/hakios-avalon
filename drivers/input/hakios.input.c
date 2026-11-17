@@ -77,6 +77,11 @@ static uint32_t fingers_down;           /* one bit for each finger a driver says
 static void
 exit_hold_elapsed(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
+	uint32_t touch_exit = 0;
+	PE_parse_boot_argn("touch_exit", &touch_exit, sizeof(touch_exit));
+	if (!touch_exit) {
+		return;
+	}
 	printf("\n--- %d fingers held on the screen for %d ms: back to the loader ---\n", EXIT_FINGERS, EXIT_HOLD_MS);
 	hakios_adreno_stop();
 	loader_return();
@@ -284,6 +289,7 @@ hakios_input_init(void)
 	hakios_cpufreq_init();
 	hakios_virtio_input_init();
 	hakios_goodix_init();
+	hakios_s3910_init();
 	hakios_buttons_init();
 	hakios_battery_init();
 	hakios_ufs_init();

@@ -54,6 +54,7 @@
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern kern_return_t thread_terminate(thread_t thread);
+extern int hakios_soc_id(void) __attribute__((weak));
 
 /*
  * Every line goes to the loader's log directly as well: without -v the kernel's own messages
@@ -109,7 +110,7 @@ wr(vm_offset_t address, uint32_t value)
 #define ARB_CHANNEL(n)          (0x900 + 4 * (n))       /* core: [19:8] slave and peripheral, [24] interrupts go to the owner */
 #define ARB_CHANNEL_INTERRUPTS  (1u << 24)
 #define ARB_OWNER(n)            (0x700 + 4 * (n))       /* cnfg: [2:0] the system that may write through channel n */
-#define ARB_MAX_CHANNELS        512
+#define ARB_MAX_CHANNELS        1024
 
 #define OBSERVER_COMMAND        0x00
 #define OBSERVER_STATUS         0x08
@@ -121,6 +122,15 @@ wr(vm_offset_t address, uint32_t value)
 #define STATUS_DROPPED          0x8
 #define COMMAND_READ            (1u << 27)      /* "extended register read long"; [11:4] register, [2:0] bytes - 1 */
 #define READ_TIMEOUT_US         2000            /* a read takes some tens of microseconds */
+
+static bool is_v7 = false;
+static uint32_t buttons_debug = 0;
+static vm_offset_t arb_core_phys = ARB_CORE_PHYS;
+static vm_size_t   arb_core_size = ARB_CORE_SIZE;
+static vm_offset_t arb_cnfg_phys = ARB_CNFG_PHYS;
+static vm_size_t   arb_cnfg_size = ARB_CNFG_SIZE;
+static vm_offset_t arb_observer_phys = ARB_OBSERVER_PHYS;
+static vm_size_t   arb_observer_size = ARB_OBSERVER_SIZE;
 
 static vm_offset_t arb_core, arb_cnfg, arb_observer;
 
@@ -147,7 +157,12 @@ static struct {
 static const char *
 spmi_read(const struct peripheral *p, uint8_t reg, uint8_t *bytes, uint32_t count)
 {
-	vm_offset_t channel = arb_observer + 0x10000UL * ARB_SYSTEM + 0x80UL * p->channel;
+	vm_offset_t channel;
+	if (is_v7) {
+		channel = arb_observer + 0x8000UL * ARB_SYSTEM + 0x20UL * p->channel;
+	} else {
+		channel = arb_observer + 0x10000UL * ARB_SYSTEM + 0x80UL * p->channel;
+	}
 	uint64_t start = mach_absolute_time(), now, interval, taken;
 	uint32_t status, data[2];
 	const char *problem = NULL;
@@ -197,12 +212,14 @@ static void
 find_channel(struct peripheral *p, uint32_t channels)
 {
 	for (uint32_t n = 0; n < channels; n++) {
-		uint32_t map = rd(arb_core + ARB_CHANNEL(n)), owner;
+		uint32_t map_reg = is_v7 ? (0x2000 + 4 * n) : (0x900 + 4 * n);
+		uint32_t owner_reg = is_v7 ? (4 * n) : (0x700 + 4 * n);
+		uint32_t map = rd(arb_core + map_reg), owner;
 
 		if (map == 0 || ((map >> 8) & 0xfff) != p->id) {
 			continue;
 		}
-		owner = rd(arb_cnfg + ARB_OWNER(n)) & 7;
+		owner = rd(arb_cnfg + owner_reg) & 7;
 		printf("buttons: channel %u is %s (%#x); written by system %u%s\n", n, p->name, map, owner,
 		    (map & ARB_CHANNEL_INTERRUPTS) ? ", which also gets its interrupts" : "");
 		if (!p->found || owner == ARB_SYSTEM) {
@@ -300,10 +317,22 @@ button_look(struct button *b, bool pressed)
 	if (pressed) {
 		b->since = now;
 		b->presses++;
-		printf("buttons: %s PRESSED at %s\n", b->name, when);
+		if (buttons_debug) {
+			printf("buttons: %s PRESSED at %s\n", b->name, when);
+		} else {
+			char msg[128];
+			snprintf(msg, sizeof(msg), "buttons: %s PRESSED at %s\n", b->name, when);
+			for (const char *c = msg; *c != 0; c++) loader_log_putc(*c);
+		}
 	} else {
 		absolutetime_to_nanoseconds(now - b->since, &held);
-		printf("buttons: %s released at %s, after %llu ms\n", b->name, when, held / NSEC_PER_MSEC);
+		if (buttons_debug) {
+			printf("buttons: %s released at %s, after %llu ms\n", b->name, when, held / NSEC_PER_MSEC);
+		} else {
+			char msg[128];
+			snprintf(msg, sizeof(msg), "buttons: %s released at %s, after %llu ms\n", b->name, when, held / NSEC_PER_MSEC);
+			for (const char *c = msg; *c != 0; c++) loader_log_putc(*c);
+		}
 	}
 	hakios_touch_post(pressed ? HAKIOS_BUTTON_DOWN : HAKIOS_BUTTON_UP, b->record, 0, 0);
 }
@@ -436,17 +465,44 @@ buttons_thread(void *parameter, __unused wait_result_t result)
 	uint32_t steps = (uint32_t)(uintptr_t)parameter, version, channels;
 	bool pon_known, pin_known;
 
-	printf("buttons: step 1: map the PMIC arbiter (%#lx, %#lx, %#lx) and read its version\n", ARB_CORE_PHYS, ARB_CNFG_PHYS,
-	    ARB_OBSERVER_PHYS);
-	arb_core = ml_io_map(ARB_CORE_PHYS, ARB_CORE_SIZE);
-	arb_cnfg = ml_io_map(ARB_CNFG_PHYS, ARB_CNFG_SIZE);
-	arb_observer = ml_io_map(ARB_OBSERVER_PHYS, ARB_OBSERVER_SIZE);
+	uint32_t soc_smem_arg = 0;
+	uint32_t buttons_cliffs = 0;
+	if ((PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000) ||
+	    (PE_parse_boot_argn("buttons_cliffs", &buttons_cliffs, sizeof(buttons_cliffs)) && buttons_cliffs) ||
+	    (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618))) {
+		is_v7 = true;
+		arb_core_phys = 0x0c400000UL;
+		arb_core_size = 0x3000UL;
+		arb_cnfg_phys = 0x0c42d000UL;
+		arb_cnfg_size = 0x4000UL;
+		arb_observer_phys = 0x0c440000UL;
+		arb_observer_size = 0x8000UL;
+		pon.name = "the PMK8550's power-on block";
+		pin.name = "GPIO6 of the PMXR2230";
+	}
+
+	printf("buttons: step 1: map the PMIC arbiter (%#lx, %#lx, %#lx) and read its version\n", arb_core_phys, arb_cnfg_phys,
+	    arb_observer_phys);
+	arb_core = ml_io_map(arb_core_phys, arb_core_size);
+	arb_cnfg = ml_io_map(arb_cnfg_phys, arb_cnfg_size);
+	arb_observer = ml_io_map(arb_observer_phys, arb_observer_size);
+	if (!arb_core || !arb_cnfg || !arb_observer) {
+		printf("buttons: could not map the PMIC arbiter; off\n");
+		goto out;
+	}
 	version = rd(arb_core + ARB_VERSION);
 	channels = rd(arb_core + ARB_FEATURES) & 0x7ff;
 	printf("buttons: PMIC arbiter version %#x, %u channels\n", version, channels);
-	if (version < ARB_VERSION_5 || version >= ARB_VERSION_7) {
-		printf("buttons: this driver knows version 5 of the arbiter only: no buttons\n");
-		goto out;
+	if (is_v7) {
+		if (version < ARB_VERSION_7) {
+			printf("buttons: expected arbiter v7, got %#x: no buttons\n", version);
+			goto out;
+		}
+	} else {
+		if (version < ARB_VERSION_5 || version >= ARB_VERSION_7) {
+			printf("buttons: this driver knows version 5 of the arbiter only: no buttons\n");
+			goto out;
+		}
 	}
 	if (channels == 0 || channels > ARB_MAX_CHANNELS) {
 		channels = ARB_MAX_CHANNELS;
@@ -498,7 +554,7 @@ buttons_thread(void *parameter, __unused wait_result_t result)
 	for (unsigned tick = 1;; tick++) {
 		buttons_poll();
 		/* once early on as well: a short run is to say what the reads cost too */
-		if (tick % MINUTE_TICKS == 0 || tick == 10 * 1000 / POLL_MS) {
+		if (buttons_debug && (tick % MINUTE_TICKS == 0 || tick == 10 * 1000 / POLL_MS)) {
 			say_summary();
 		}
 		if (bus.failed >= 1000 && bus.failed * 2 > bus.reads) {
@@ -567,6 +623,7 @@ hakios_buttons_init(void)
 	uint32_t enabled = 0, steps = 5;
 	thread_t thread;
 
+	PE_parse_boot_argn("buttons_debug", &buttons_debug, sizeof(buttons_debug));
 	press_power_init();
 
 	/*

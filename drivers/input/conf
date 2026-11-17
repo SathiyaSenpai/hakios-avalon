@@ -11,8 +11,11 @@ driver VIRTIO_INPUT
 
 driver GOODIX
 	file    bsd/dev/hakios.goodix.c
-	help    the touch screen: a Goodix GT9916 ("Berlin-D") or a FocalTech FT3680 on SPI (touchscreen=1). The bus,
-	help    pins and supplies are the POCO X5 Pro's; another phone with one of these controllers changes those
+	help    the touch screen: a Goodix GT9916 ("Berlin-D") or a FocalTech FT3680 on SPI (touchscreen=1).
+
+driver S3910
+	file    bsd/dev/hakios.s3910.c
+	help    the touch screen: Synaptics S3910 on SPI (touchscreen=1) for OnePlus Nord 4 (avalon)
 
 driver BUTTONS
 	file    bsd/dev/hakios.buttons.c

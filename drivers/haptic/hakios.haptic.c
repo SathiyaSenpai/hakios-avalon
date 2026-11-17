@@ -125,21 +125,50 @@ wait_ms(uint32_t ms)
 /* ---- pins ------------------------------------------------------------------------------------------ */
 
 #define TLMM_PHYS               0x0f100000UL
-#define TLMM_SIZE               0x100000UL
+#define TLMM_SIZE               0x94000UL       /* covers GPIO 0..147 */
 #define GPIO_CFG(n)             (tlmm + 0x1000UL * (n))         /* [1:0] pull, [5:2] function, [8:6] drive, [9] output */
 #define GPIO_IO(n)              (tlmm + 0x1000UL * (n) + 4)     /* bit 0 in, bit 1 out */
 #define CFG_PULL_UP             3
 #define CFG_OUTPUT              (1u << 9)
 
-#define PIN_SDA                 36      /* the serial engine's first pin is the data line, the second the clock */
-#define PIN_SCL                 37
-#define PIN_RESET               35
-#define PIN_INT                 18
+static unsigned pin_sda = 36;      /* the serial engine's first pin is the data line, the second the clock */
+static unsigned pin_scl = 37;
+static unsigned pin_reset = 35;
+static unsigned pin_int = 18;
+
+#define PIN_SDA                 pin_sda
+#define PIN_SCL                 pin_scl
+#define PIN_RESET               pin_reset
+#define PIN_INT                 pin_int
+
+extern int hakios_soc_id(void) __attribute__((weak));
+
+static void
+haptic_select_pins(void)
+{
+	uint32_t soc_smem_arg = 0;
+	PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg));
+
+	bool is_cliffs = (soc_smem_arg == 0x81d00000) ||
+	                 (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618));
+
+	if (is_cliffs) {
+		pin_sda = 12;
+		pin_scl = 13;
+		pin_reset = 147;
+		pin_int = 145;
+	} else {
+		pin_sda = 36;
+		pin_scl = 37;
+		pin_reset = 35;
+		pin_int = 18;
+	}
+}
 
 static void
 show_pins(void)
 {
-	static const struct {
+	const struct {
 		unsigned pin;
 		const char *what;
 	} pins[] = { { PIN_SDA, "I2C data" }, { PIN_SCL, "I2C clock" }, { PIN_RESET, "reset" }, { PIN_INT, "interrupt" } };
@@ -461,9 +490,11 @@ chip_answers(void)
 		say("haptic: nobody answers at %#x on the bus of gpio%u/%u\n", AW_ADDRESS, PIN_SDA, PIN_SCL);
 		return false;
 	}
-	say("haptic: the chip at %#x is %#06x%s\n", AW_ADDRESS, id[0] << 8 | id[1], (id[0] << 8 | id[1]) == AW_CHIPID ? ", an AW86927" :
+	uint16_t chip_id = (uint16_t)((id[0] << 8) | id[1]);
+	bool valid = (chip_id == AW_CHIPID) || (id[0] == 0x92) || (chip_id == 0x8697);
+	say("haptic: the chip at %#x is %#06x%s\n", AW_ADDRESS, chip_id, valid ? ", an AW86927/AW869x" :
 	    ": NOT THE AW86927 EXPECTED");
-	return (id[0] << 8 | id[1]) == AW_CHIPID;
+	return valid;
 }
 
 /*
@@ -940,6 +971,7 @@ haptic_thread(__unused void *parameter, __unused wait_result_t result)
 	bool loaded = false;
 
 	tlmm = ml_io_map(TLMM_PHYS, TLMM_SIZE);
+	haptic_select_pins();
 	say("haptic: level %u: %s\n", level, level == 1 ? "a look, reading only" : level == 2 ? "the reset released, registers read" :
 	    level == 3 ? "the chip configured and its waveforms loaded, nothing played" : level == 4 ? "one effect played" :
 	    "the motor for Darwin");
@@ -972,6 +1004,8 @@ haptic_thread(__unused void *parameter, __unused wait_result_t result)
 			(void)play_effect(effect);
 		} else if (level == 5 && !broken && loaded) {
 			/* (not started when the waveforms did not load: it would play whatever the RAM held) */
+			say("haptic: playing boot confirmation tap...\n");
+			play_effect(1);
 			serve();
 		} else if (level == 5 && !broken) {
 			give_up("the waveforms are not loaded");

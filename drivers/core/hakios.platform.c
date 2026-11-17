@@ -20,7 +20,7 @@
 #include "hakios.drivers.h"
 
 /* kern.hakios: the node every driver of this port hangs its sysctls under (it was hakios.battery.c's) */
-SYSCTL_NODE(_kern, OID_AUTO, hakios, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "redwood phone bits");
+SYSCTL_NODE(_kern, OID_AUTO, hakios, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "avalon phone bits");
 
 static LCK_GRP_DECLARE(hakios_platform_lock_group, "hakios-platform");
 

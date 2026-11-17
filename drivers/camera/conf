@@ -4,8 +4,7 @@
 
 driver CAMERA
 	file    bsd/dev/hakios.camera.c
-	help    the cameras (cam=N): the sensors on the CCI bus and the ISP's interface. The sensors, their tables
-	help    (fw-camera/) and the pins are the POCO X5 Pro's
+	help    the cameras (cam=N): the sensors on the CCI bus and the ISP's interface (fw-camera/)
 
 driver TORCH
 	file    bsd/dev/hakios.torch.c
