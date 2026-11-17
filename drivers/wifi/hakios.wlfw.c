@@ -474,10 +474,16 @@ hakios_wlfw_exchange(uint32_t step)
 	/*
 	 * ath11k_qmi_event_load_bdf(): the regulatory database, whose fate qmi.c does not look at, then
 	 * the board's data. ath11k would look in "board-2.bin" for an entry named after the ids above
-	 * and fall back to "board.bin"; here it is the file this phone's Android sends.
+	 * and fall back to "board.bin"; prefer Nord 4 / standard Android names and fall back to redwood's.
 	 */
-	send_file("the regulatory database", "regdb_xiaomi.bin", ATH11K_QMI_BDF_TYPE_REGDB, board_id);
-	board = send_file("the board's data", "bd_m20gl.elf", ATH11K_QMI_BDF_TYPE_ELF, board_id);
+	{
+		uint64_t fsz = 0;
+		const char *regdb = hakios_wifi_file("regdb.bin", &fsz) != NULL ? "regdb.bin" : "regdb_xiaomi.bin";
+		const char *bdf = hakios_wifi_file("bdwlan.elf", &fsz) != NULL ? "bdwlan.elf" : "bd_m20gl.elf";
+
+		send_file("the regulatory database", regdb, ATH11K_QMI_BDF_TYPE_REGDB, board_id);
+		board = send_file("the board's data", bdf, ATH11K_QMI_BDF_TYPE_ELF, board_id);
+	}
 	if (!board) {
 		goto out;
 	}

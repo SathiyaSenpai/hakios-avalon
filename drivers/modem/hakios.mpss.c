@@ -92,6 +92,8 @@ extern vm_offset_t pe_arm_get_soc_base_phys(void);
 extern dev_t mdevlookup(int devid);
 extern int mdevgetkernelrange(dev_t dev, vm_offset_t *base, uint64_t *size);
 extern void FlushPoC_DcacheRegion(vm_offset_t va, size_t length);   /* osfmk/arm64/caches_asm.s */
+extern int hakios_soc_id(void) __attribute__((weak));
+extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
 
 /* What the Wi-Fi's DSP and this one both use (hakios.wifi.c). */
 extern lck_mtx_t hakios_aop_mailbox_lock;
@@ -809,15 +811,61 @@ static struct block rsc = { "rsc", 0x18220000, 0x10000 };
 #define RSC_IRQ_STATUS          (RSC_TCS_BASE + 0x04)   /* a bit per TCS: done */
 #define RSC_IRQ_CLEAR           (RSC_TCS_BASE + 0x08)
 #define RSC_TCS(n)              (RSC_TCS_BASE + 672 * (n))
-#define TCS_WAIT_FOR_DONE       0x10
-#define TCS_CONTROL             0x14
-#define TCS_STATUS              0x18                    /* not zero: idle */
-#define TCS_ENABLED             0x1c
-#define TCS_COMMAND(c)          (0x30 + 20 * (c))       /* message id, address, value, status */
 #define TCS_ACTIVE_MODE         (1u << 16)
 #define TCS_TRIGGER             (1u << 24)
 #define MSGID_WRITE_WAITED      (8u | 1u << 8 | 1u << 16)       /* four bytes, an answer wanted, a write */
-#define RPMH_TCS                0                       /* the first of the two for requests made at once */
+
+static uint32_t rpmh_tcs_id = 0;        /* 0 on SM7325 (v2.7), 3 (ACTIVE TCS) on SM7675 Cliffs (v3.2) */
+static uint32_t tcs_reg_wait = 0x10;
+static uint32_t tcs_reg_control = 0x14;
+static uint32_t tcs_reg_status = 0x18;
+static uint32_t tcs_reg_enable = 0x1c;
+static uint32_t tcs_cmd_stride = 20;
+static uint32_t tcs_cmd_msgid = 0x30;
+static uint32_t tcs_cmd_status_off = 12;
+static bool rsc_inited = false;
+
+static void
+rsc_init_offsets(void)
+{
+	uint32_t rsc_id, major, minor;
+
+	if (rsc_inited) {
+		return;
+	}
+	need(&rsc);
+	rsc_id = rd(rsc.base + 0);
+	major = (rsc_id >> 16) & 0xff;
+	minor = (rsc_id >> 8) & 0xff;
+	if (major >= 3) {
+		/* SM7675 Cliffs (RSC v3.2): WAKE=0..2, ACTIVE=3..4 */
+		rpmh_tcs_id = 3;
+		tcs_reg_wait = 0x20;
+		tcs_reg_control = 0x24;
+		tcs_reg_status = 0x28;
+		tcs_reg_enable = 0x2c;
+		tcs_cmd_stride = 24;
+		tcs_cmd_msgid = 0x34;
+		tcs_cmd_status_off = 12;
+	} else {
+		/* SM7325/SM8350 (RSC v2.7) */
+		rpmh_tcs_id = 0;
+		tcs_reg_wait = 0x10;
+		tcs_reg_control = 0x14;
+		tcs_reg_status = 0x18;
+		tcs_reg_enable = 0x1c;
+		tcs_cmd_stride = 20;
+		tcs_cmd_msgid = 0x30;
+		tcs_cmd_status_off = 12;
+	}
+	rsc_inited = true;
+	printf("mpss: %u: RPMh RSC ID %#x (v%u.%u, ACTIVE TCS %u)\n", step, rsc_id, major, minor, rpmh_tcs_id);
+}
+
+#define TCS_COMMAND_MSGID(c)    (tcs_cmd_msgid + tcs_cmd_stride * (c))
+#define TCS_COMMAND_ADDR(c)     (tcs_cmd_msgid + 4 + tcs_cmd_stride * (c))
+#define TCS_COMMAND_DATA(c)     (tcs_cmd_msgid + 8 + tcs_cmd_stride * (c))
+#define TCS_COMMAND_STATUS(c)   (tcs_cmd_msgid + tcs_cmd_status_off + tcs_cmd_stride * (c))
 
 /* The level position RPMh takes for that rail and level; -1: not found. */
 static int
@@ -895,45 +943,45 @@ rails(uint32_t level)
 		}
 		values[r] = (uint32_t)position;
 	}
-	need(&rsc);
 	lck_mtx_lock(&hakios_rsc_lock);
+	rsc_init_offsets();
 	/* (the boot loader leaves the trigger set after its last request, done: idle is what the status says) */
-	if (rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_STATUS) == 0) {
-		printf("mpss: %u: TCS %u of the sequencer is busy (status %#x, control %#x): the rails are not asked\n", step, RPMH_TCS,
-		    rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_STATUS), rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL));
+	if (rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_status) == 0) {
+		printf("mpss: %u: TCS %u of the sequencer is busy (status %#x, control %#x): the rails are not asked\n", step, rpmh_tcs_id,
+		    rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_status), rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control));
 		lck_mtx_unlock(&hakios_rsc_lock);
 		return false;
 	}
 	printf("mpss: %u: about to ask RPMh, through TCS %u, for cx.lvl (%#x) = %u and mss.lvl (%#x) = %u (level %u%s)\n", step,
-	    RPMH_TCS, addresses[0], values[0], addresses[1], values[1], level, level == 0 ? ": given back" : "");
+	    rpmh_tcs_id, addresses[0], values[0], addresses[1], values[1], level, level == 0 ? ": given back" : "");
 	snprintf(last_write, sizeof(last_write), "step %u asked RPMh for the modem's rails at level %u", step, level);
 	hold();
-	wr(rsc.base + RSC_IRQ_CLEAR, 1u << RPMH_TCS);
+	wr(rsc.base + RSC_IRQ_CLEAR, 1u << rpmh_tcs_id);
 	for (unsigned r = 0; r < 2; r++) {
-		wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(r), MSGID_WRITE_WAITED);
-		wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(r) + 4, addresses[r]);
-		wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(r) + 8, values[r]);
+		wr(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_MSGID(r), MSGID_WRITE_WAITED);
+		wr(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_ADDR(r), addresses[r]);
+		wr(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_DATA(r), values[r]);
 	}
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_WAIT_FOR_DONE, 3);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_ENABLED, 3);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_wait, 3);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_enable, 3);
 	settle();
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) & ~TCS_TRIGGER);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) | TCS_ACTIVE_MODE);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) | TCS_TRIGGER);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) & ~TCS_TRIGGER);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) | TCS_ACTIVE_MODE);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) | TCS_TRIGGER);
 	began = now_us();
 	while (now_us() - began < 100000) {
-		done = rd(rsc.base + RSC_IRQ_STATUS) & (1u << RPMH_TCS);
+		done = rd(rsc.base + RSC_IRQ_STATUS) & (1u << rpmh_tcs_id);
 		if (done) {
 			break;
 		}
 		sleep_us(50);
 	}
 	printf("mpss: %u: RPMh %s after %llu us; the commands' status %#x %#x, the TCS's %#x\n", step, done ? "HAS DONE IT" :
-	    "HAS NOT SAID DONE", now_us() - began, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(0) + 12),
-	    rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(1) + 12), rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_STATUS));
-	wr(rsc.base + RSC_IRQ_CLEAR, 1u << RPMH_TCS);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) & ~(TCS_TRIGGER | TCS_ACTIVE_MODE));
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_ENABLED, 0);
+	    "HAS NOT SAID DONE", now_us() - began, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_STATUS(0)),
+	    rd(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_STATUS(1)), rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_status));
+	wr(rsc.base + RSC_IRQ_CLEAR, 1u << rpmh_tcs_id);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) & ~(TCS_TRIGGER | TCS_ACTIVE_MODE));
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_enable, 0);
 	lck_mtx_unlock(&hakios_rsc_lock);
 	return done != 0;
 }
@@ -955,39 +1003,39 @@ rpmh_command(const char *name, uint32_t value)
 		printf("mpss: %u: RPMh has no \"%s\": nothing is asked\n", step, name);
 		return false;
 	}
-	need(&rsc);
 	lck_mtx_lock(&hakios_rsc_lock);
-	if (rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_STATUS) == 0) {
-		printf("mpss: %u: TCS %u of the sequencer is busy: \"%s\" is not asked\n", step, RPMH_TCS, name);
+	rsc_init_offsets();
+	if (rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_status) == 0) {
+		printf("mpss: %u: TCS %u of the sequencer is busy: \"%s\" is not asked\n", step, rpmh_tcs_id, name);
 		lck_mtx_unlock(&hakios_rsc_lock);
 		return false;
 	}
-	printf("mpss: %u: about to ask RPMh, through TCS %u, for %s (%#x) = %#x\n", step, RPMH_TCS, name, address, value);
+	printf("mpss: %u: about to ask RPMh, through TCS %u, for %s (%#x) = %#x\n", step, rpmh_tcs_id, name, address, value);
 	snprintf(last_write, sizeof(last_write), "step %u asked RPMh for %s = %#x", step, name, value);
 	hold();
-	wr(rsc.base + RSC_IRQ_CLEAR, 1u << RPMH_TCS);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(0), MSGID_WRITE_WAITED);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(0) + 4, address);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(0) + 8, value);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_WAIT_FOR_DONE, 1);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_ENABLED, 1);
+	wr(rsc.base + RSC_IRQ_CLEAR, 1u << rpmh_tcs_id);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_MSGID(0), MSGID_WRITE_WAITED);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_ADDR(0), address);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_DATA(0), value);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_wait, 1);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_enable, 1);
 	settle();
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) & ~TCS_TRIGGER);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) | TCS_ACTIVE_MODE);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) | TCS_TRIGGER);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) & ~TCS_TRIGGER);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) | TCS_ACTIVE_MODE);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) | TCS_TRIGGER);
 	began = now_us();
 	while (now_us() - began < 100000) {
-		done = rd(rsc.base + RSC_IRQ_STATUS) & (1u << RPMH_TCS);
+		done = rd(rsc.base + RSC_IRQ_STATUS) & (1u << rpmh_tcs_id);
 		if (done) {
 			break;
 		}
 		sleep_us(50);
 	}
 	printf("mpss: %u: RPMh %s after %llu us for %s; the command's status %#x\n", step, done ? "HAS DONE IT" : "HAS NOT SAID DONE",
-	    now_us() - began, name, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_COMMAND(0) + 12));
-	wr(rsc.base + RSC_IRQ_CLEAR, 1u << RPMH_TCS);
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL, rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_CONTROL) & ~(TCS_TRIGGER | TCS_ACTIVE_MODE));
-	wr(rsc.base + RSC_TCS(RPMH_TCS) + TCS_ENABLED, 0);
+	    now_us() - began, name, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + TCS_COMMAND_STATUS(0)));
+	wr(rsc.base + RSC_IRQ_CLEAR, 1u << rpmh_tcs_id);
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control, rd(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_control) & ~(TCS_TRIGGER | TCS_ACTIVE_MODE));
+	wr(rsc.base + RSC_TCS(rpmh_tcs_id) + tcs_reg_enable, 0);
 	lck_mtx_unlock(&hakios_rsc_lock);
 	return done != 0;
 }
@@ -1047,9 +1095,33 @@ step_survey(void)
 #define MPSS_MEMORY_DEFAULT     0x8b800000u   /* dt: reserved-memory mpss@..., memory-region of qcom,mss */
 static uint32_t mpss_memory = MPSS_MEMORY_DEFAULT;
 #define MPSS_MEMORY_SIZE        0x0f600000u
+static uint32_t mpss_memory_size = MPSS_MEMORY_SIZE;
 #define PAS_MPSS_DEFAULT        4               /* dt: qcom,pas-id of qcom,mss */
 static uint32_t pas_mpss = PAS_MPSS_DEFAULT;
+static uint32_t mpss_dtb_memory = 0x98900000u, mpss_dtb_size = 0x80000u, pas_mpss_dtb = 0x26u;
+static bool mpss_dtb_loaded;
+static uint32_t ipa_smem_size = 0x9000u;
+static uint32_t gsi_phys = 0x01e04000u;
+static uint64_t rmtfs_buffer_pa_default = 0x9c700000ull;
+static char ipa_fw_default[32] = "yupik_ipa_fws";
 
+static bool
+mpss_is_cliffs_soc(void)
+{
+	uint32_t soc_smem_arg = 0;
+	char soc_arg[32] = "";
+
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return true;
+	}
+	if (PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000u) {
+		return true;
+	}
+	if (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618)) {
+		return true;
+	}
+	return false;
+}
 
 /*
  * A file of /fw on the root file system, read whole into memory of ours: the system image, where
@@ -1077,7 +1149,7 @@ root_file(const char *name, uint64_t *size)
 	VATTR_INIT(&attributes);
 	VATTR_WANTED(&attributes, va_data_size);
 	if (vnode_getattr(vnode, &attributes, context) != 0 || attributes.va_data_size == 0 ||
-	    attributes.va_data_size > MPSS_MEMORY_SIZE) {
+	    attributes.va_data_size > mpss_memory_size) {
 		vnode_put(vnode);
 		return NULL;
 	}
@@ -1205,7 +1277,7 @@ step_firmware(void)
 			continue;
 		}
 		if (segment.paddr < mpss_memory || segment.file_size > segment.memory_size ||
-		    (uint64_t)segment.paddr + segment.memory_size > (uint64_t)mpss_memory + MPSS_MEMORY_SIZE) {
+		    (uint64_t)segment.paddr + segment.memory_size > (uint64_t)mpss_memory + mpss_memory_size) {
 			printf("mpss: %u: segment %u (%#x, %#x bytes) is not within the DSP's memory\n", step, i, segment.paddr,
 			    segment.memory_size);
 			goto fail;
@@ -1243,7 +1315,7 @@ step_firmware(void)
 	image.size = ((highest + 0xfff) & ~0xfffu) - mpss_memory;
 	printf("mpss: %u: the image is whole (%s): a header of %llu bytes (%u of hashes), %u segments, %llu bytes of files, %#x "
 	    "bytes of the DSP's %#x from %#x\n", step, from_root ? "from /fw on the root" : "from the small image", size, hashes,
-	    image.segments, files, image.size, MPSS_MEMORY_SIZE, mpss_memory);
+	    image.segments, files, image.size, mpss_memory_size, mpss_memory);
 	announce("read the modem's four file systems from the phone's storage into memory of ours (rmtfs below)");
 	{
 		unsigned loaded = rmtfs_load();
@@ -1445,6 +1517,10 @@ dsp_shutdown(const char *why)
 		ipa_firmware_stop();
 		ipa_loaded = false;
 	}
+	if (mpss_dtb_loaded) {
+		(void)scm("to shut the modem DTB down", SCM_PAS_SHUTDOWN, SCM_ONE_VALUE, pas_mpss_dtb, 0, 0, 0, &answer);
+		mpss_dtb_loaded = false;
+	}
 	if (!leaving) {
 		rmtfs_share(false);
 	}
@@ -1488,6 +1564,93 @@ step_header(void)
 		printf("mpss: %u: the DSP has left nothing in the shared memory: it has not run since the phone was started\n", step);
 	}
 
+	/* SM7675 Cliffs pairs modem.mdt with modem_dtb.mdt (PAS 0x26 @ q6_mpss_dtb_region 0x98900000) when present. */
+	if (mpss_is_cliffs_soc()) {
+		uint64_t dtb_hdr_size = 0;
+		const uint8_t *dtb_hdr = root_file("modem_dtb.mdt", &dtb_hdr_size);
+		bool dtb_in_image = false;
+		if (dtb_hdr == NULL) {
+			dtb_hdr = root_file("image/modem_dtb.mdt", &dtb_hdr_size);
+			dtb_in_image = dtb_hdr != NULL;
+		}
+		if (dtb_hdr != NULL) {
+			uint32_t dcount = dtb_hdr_size >= 52 ? dtb_hdr[44] | dtb_hdr[45] << 8 : 0;
+			if (memcmp(dtb_hdr, "\177ELF\1", 5) == 0 && dcount > 0 && dcount <= 8 && 52 + 32 * dcount <= dtb_hdr_size) {
+				vm_offset_t dpage = 0;
+				const uint8_t *dseg_file[8] = { NULL };
+				uint64_t dseg_size[8] = { 0 };
+				struct elf_segment dseg[8];
+				uint32_t dhighest = mpss_dtb_memory;
+				bool dok = kmem_alloc(kernel_map, &dpage, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) == KERN_SUCCESS;
+				for (uint32_t i = 0; dok && i < dcount; i++) {
+					char dname[48];
+					memcpy(&dseg[i], dtb_hdr + 52 + 32 * i, sizeof(dseg[i]));
+					if (dseg[i].type != 1 || MDT_HASH(dseg[i].flags) || dseg[i].memory_size == 0) {
+						continue;
+					}
+					if (dseg[i].paddr < mpss_dtb_memory || (uint64_t)dseg[i].paddr + dseg[i].memory_size > (uint64_t)mpss_dtb_memory + mpss_dtb_size) {
+						dok = false;
+						break;
+					}
+					if (dseg[i].file_size != 0) {
+						snprintf(dname, sizeof(dname), "%smodem_dtb.b%02u", dtb_in_image ? "image/" : "", i);
+						dseg_file[i] = root_file(dname, &dseg_size[i]);
+						if (dseg_file[i] == NULL || dseg_size[i] != dseg[i].file_size) {
+							dok = false;
+							break;
+						}
+					}
+					if (dseg[i].paddr + dseg[i].memory_size > dhighest) {
+						dhighest = dseg[i].paddr + dseg[i].memory_size;
+					}
+				}
+				uint32_t dspan = ((dhighest + 0xfffu) & ~0xfffu) - mpss_dtb_memory;
+				if (dok && dspan > 0 && dspan <= mpss_dtb_size) {
+					memcpy((void *)dpage, dtb_hdr, dtb_hdr_size < PAGE_SIZE ? dtb_hdr_size : PAGE_SIZE);
+					for (vm_offset_t line = dpage; line < dpage + PAGE_SIZE; line += 64) {
+						__asm__ volatile ("dc civac, %0" : : "r" (line));
+					}
+					settle();
+					if (scm("to take the modem DTB header", SCM_PAS_INIT_IMAGE, SCM_VALUE_AND_BUFFER, pas_mpss_dtb, kvtophys(dpage), 0, 0, &answer) == 0 && answer == 0 &&
+					    scm("where the modem DTB will be", SCM_PAS_MEM_SETUP, SCM_THREE_VALUES, pas_mpss_dtb, mpss_dtb_memory, mpss_dtb_size, 0, &answer) == 0 && answer == 0) {
+						volatile uint8_t *dm = (volatile uint8_t *)ml_io_map_unmappable(mpss_dtb_memory, mpss_dtb_size, VM_WIMG_WCOMB);
+						if (dm != NULL) {
+							for (uint32_t i = 0; i < dcount; i++) {
+								if (dseg[i].type != 1 || MDT_HASH(dseg[i].flags) || dseg[i].memory_size == 0) {
+									continue;
+								}
+								uint32_t at = dseg[i].paddr - mpss_dtb_memory;
+								for (uint32_t b = 0; b < dseg[i].memory_size; b++) {
+									dm[at + b] = b < dseg[i].file_size ? dseg_file[i][b] : 0;
+								}
+							}
+							settle();
+							ml_io_unmap((vm_offset_t)dm, mpss_dtb_size);
+							if (scm("to authenticate the modem DTB", SCM_PAS_AUTH_AND_RESET, SCM_ONE_VALUE, pas_mpss_dtb, 0, 0, 0, &answer) == 0 && answer == 0) {
+								mpss_dtb_loaded = true;
+								printf("mpss: %u: modem_dtb loaded and authenticated (PAS %#x @ %#x)\n", step, pas_mpss_dtb, mpss_dtb_memory);
+							}
+						}
+					}
+				}
+				if (dpage != 0) {
+					kmem_free(kernel_map, dpage, PAGE_SIZE);
+				}
+				for (uint32_t i = 0; i < 8; i++) {
+					if (dseg_file[i] != NULL) {
+						uint8_t *gone = __DECONST(uint8_t *, dseg_file[i]);
+
+						kfree_data(gone, dseg_size[i]);
+					}
+				}
+			}
+			{
+				uint8_t *gone = __DECONST(uint8_t *, dtb_hdr);
+
+				kfree_data(gone, dtb_hdr_size);
+			}
+		}
+	}
 	announce("hand the image's header to TrustZone to check its signature (image 4), in a page of ours");
 	if (kmem_alloc(kernel_map, &page, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
 		printf("mpss: %u: no memory\n", step);
@@ -1506,12 +1669,12 @@ step_header(void)
 	printf("mpss: %u: TRUSTZONE ACCEPTS THE MODEM'S SIGNATURE FROM THIS KERNEL\n", step);
 
 	announce("tell TrustZone where the image will be: the whole of the modem's memory, as Linux does");
-	result = scm("where the image will be", SCM_PAS_MEM_SETUP, SCM_THREE_VALUES, pas_mpss, mpss_memory, MPSS_MEMORY_SIZE, 0, &answer);
+	result = scm("where the image will be", SCM_PAS_MEM_SETUP, SCM_THREE_VALUES, pas_mpss, mpss_memory, mpss_memory_size, 0, &answer);
 	if (result != 0 || answer != 0) {
 		printf("mpss: %u: TRUSTZONE DOES NOT TAKE THE PLACE: the call returns %d, its answer is %#llx\n", step, result, answer);
 		return false;
 	}
-	printf("mpss: %u: TrustZone takes the place: %#x bytes at %#x (the image takes %#x of them)\n", step, MPSS_MEMORY_SIZE, mpss_memory,
+	printf("mpss: %u: TrustZone takes the place: %#x bytes at %#x (the image takes %#x of them)\n", step, mpss_memory_size, mpss_memory,
 	    image.size);
 	return true;
 }
@@ -1769,8 +1932,8 @@ step_our_item(void)
 		if (ipa_item != 0) {
 			if (smem_item(ipa_item, &ipa_size) != 0) {
 				printf("mpss: %u: the IPA's item %u is there already (%u bytes)\n", step, ipa_item, ipa_size);
-			} else if (our_item_make(partition, ipa_item, 0x9000)) {
-				tell("mpss: %u: THE IPA'S ITEM %u MADE, 0x9000 bytes, zeroed (the modem's filter tables go there)\n", step, ipa_item);
+			} else if (our_item_make(partition, ipa_item, ipa_smem_size)) {
+				tell("mpss: %u: THE IPA'S ITEM %u MADE, %#x bytes, zeroed (the modem's filter tables go there)\n", step, ipa_item, ipa_smem_size);
 			} else {
 				printf("mpss: %u: the IPA's item %u could not be made\n", step, ipa_item);
 			}
@@ -2195,8 +2358,17 @@ ipa_firmware_load(void)
 	int32_t result;
 	bool ok = false;
 
+	char fw[80], path[96];
+	bool fw_in_image = true;
+
 	PE_parse_boot_argn("modem_ipa_fw_at", &ipa_fw_memory, sizeof(ipa_fw_memory));
-	ipa_fw_size = ipa_fw_memory == 0x8b700000u ? 0x1a000u : 0xa000u;
+	if (ipa_fw_memory == 0x8b700000u) {
+		ipa_fw_size = 0x1a000u;
+	} else if (mpss_is_cliffs_soc()) {
+		ipa_fw_size = ipa_fw_memory == 0x98980000u ? 0x10000u : 0xa000u;
+	} else {
+		ipa_fw_size = 0xa000u;
+	}
 	announce("turn the IPA's clock on (RPMh), load the IPA's firmware (image 15) into its memory and have TrustZone start it, as "
 	    "Android does before the modem");
 	printf("mpss: %u: the IPA's image goes at %#x (%#x bytes allowed)\n", step, ipa_fw_memory, ipa_fw_size);
@@ -2207,23 +2379,22 @@ ipa_firmware_load(void)
 	if (!option("modem_ipa_smmu_off")) {
 		ipa_space_on();
 	}
-	{
-		/* the IPA's firmware file is SoC-specific (dt: qcom,firmware-name of qcom,ipa_fws; "yupik_ipa_fws"
-		 * on the first phone, something else on another SoC); soc_ipa_fw= overrides the name */
-		char fw[80], path[96];
-
-		strlcpy(fw, "yupik_ipa_fws", sizeof(fw));
-		PE_parse_boot_argn("soc_ipa_fw", fw, sizeof(fw));
-		snprintf(path, sizeof(path), "image/%s.mdt", fw);
+	strlcpy(fw, ipa_fw_default, sizeof(fw));
+	PE_parse_boot_argn("soc_ipa_fw", fw, sizeof(fw));
+	snprintf(path, sizeof(path), "image/%s.mdt", fw);
+	header = root_file(path, &header_size);
+	if (header == NULL) {
+		snprintf(path, sizeof(path), "%s.mdt", fw);
 		header = root_file(path, &header_size);
-		if (header == NULL) {
-			printf("mpss: %u: no fw/%s: the IPA's firmware is not loaded\n", step, path);
-			return false;
-		}
+		fw_in_image = false;
+	}
+	if (header == NULL) {
+		printf("mpss: %u: no fw/%s (or image/%s.mdt): the IPA's firmware is not loaded\n", step, path, fw);
+		return false;
 	}
 	count = header_size >= 52 ? header[44] | header[45] << 8 : 0;
 	if (memcmp(header, "\177ELF\1", 5) != 0 || count == 0 || count > 8 || 52 + 32 * count > header_size) {
-		printf("mpss: %u: yupik_ipa_fws.mdt is not such a header (%u segments)\n", step, count);
+		printf("mpss: %u: %s.mdt is not such a header (%u segments)\n", step, fw, count);
 		goto out;
 	}
 	/* (the image is relocatable, bit 27 of the flags: its addresses count from the lowest, which goes at the region's start) */
@@ -2247,7 +2418,7 @@ ipa_firmware_load(void)
 		}
 	}
 	for (uint32_t i = 0; i < count; i++) {
-		char name[48];
+		char name[96];
 
 		if (segments[i].type != 1 || MDT_HASH(segments[i].flags) || segments[i].memory_size == 0) {
 			continue;
@@ -2258,7 +2429,7 @@ ipa_firmware_load(void)
 			goto out;
 		}
 		if (segments[i].file_size != 0) {
-			snprintf(name, sizeof(name), "image/yupik_ipa_fws.b%02u", i);
+			snprintf(name, sizeof(name), "%s%s.b%02u", fw_in_image ? "image/" : "", fw, i);
 			segment_file[i] = root_file(name, &segment_size[i]);
 			if (segment_file[i] == NULL || segment_size[i] != segments[i].file_size) {
 				printf("mpss: %u: fw/%s: %s\n", step, name, segment_file[i] == NULL ? "not there" : "not the size the header says");
@@ -2320,7 +2491,7 @@ ipa_firmware_load(void)
 	 */
 	for (uint32_t i = 0; i < count; i++) {
 		if (segments[i].type == 1 && !MDT_HASH(segments[i].flags) && segment_file[i] != NULL && segments[i].file_size >= 16 &&
-		    segments[i].vaddr >= 0x01e00000u && segments[i].vaddr < 0x01f00000u) {
+		    segments[i].vaddr >= (gsi_phys & ~0xfffffu) && segments[i].vaddr < (gsi_phys & ~0xfffffu) + 0x100000u) {
 			struct block iram = { "ipa iram", segments[i].vaddr & ~0xfffu, 0x8000 };
 			uint32_t n = segments[i].file_size < 256 ? segments[i].file_size : 256, same = 0, first[4];
 
@@ -2340,7 +2511,7 @@ ipa_firmware_load(void)
 		}
 	}
 	{
-		struct block gsi = { "gsi", 0x01e04000, 0xc000 };       /* GSI_CFG at 0, MCS_CFG at 0xb000 (the panic of cycle 26: 0x1000 mapped) */
+		struct block gsi = { "gsi", gsi_phys, 0xc000 };       /* GSI_CFG at 0, MCS_CFG at 0xb000 */
 
 		need(&gsi);
 		tell("mpss: %u: GSI_CFG %#x (bit 0 GSI enable, 1 MCS enable, 2 double MCS clock, 3 uC is MCS, 4 power collapse, 5 bypass matrix off, "
@@ -3634,7 +3805,7 @@ rmtfs_buffer_make(void)
 	if (rmtfs_window != NULL) {
 		return true;
 	}
-	rmtfs_buffer_pa = RMTFS_BUFFER_PA_DEFAULT;
+	rmtfs_buffer_pa = rmtfs_buffer_pa_default;
 	PE_parse_boot_argn("modem_buffer", &rmtfs_buffer_pa, sizeof(rmtfs_buffer_pa));      /* (another region, to try) */
 	rmtfs_window = (volatile uint8_t *)ml_io_map_unmappable((vm_offset_t)rmtfs_buffer_pa, RMTFS_BUFFER_SIZE, VM_WIMG_WCOMB);
 	if (rmtfs_window == NULL) {
@@ -6317,7 +6488,42 @@ soc_override(void)
 		{ "soc_ipa_regs", &ipa_regs }, { "soc_ipa_sram", &ipa_sram }, { "soc_gsi_ee0", &gsi_ee0 }, { "soc_apps_smmu", &apps_smmu },
 	};
 	unsigned said = 0;
+	uint32_t base = 0;
 
+	if (mpss_is_cliffs_soc()) {
+		/* SM7675 Cliffs (OnePlus Nord 4) DT hardware defaults */
+		aoss.phys = 0x0c300000u;
+		ipcc.phys = 0x00406000u;
+		rsc.phys = 0x17a20000u;
+		smem_lock.phys = 0x01f43000u;
+		ipa_regs.phys = 0x03e40000u;
+		ipa_sram.phys = 0x03e50000u;
+		gsi_ee0.phys = 0x03e16000u;
+		gsi_phys = 0x03e04000u;
+		apps_smmu.phys = 0x15000000u;
+		smem_phys = 0x81d00000u;
+		cmd_db_phys = 0x81c60000u;
+		mpss_memory = 0x8bc00000u;
+		mpss_memory_size = 0x0cd00000u;
+		ipa_fw_memory = 0x98980000u;
+		ipa_fw_size = 0x10000u;
+		ipa_smem_size = 0xb000u;
+		ipa_stream = 0x4a0u;
+		ipa_stream_uc = 0x4a2u;
+		rmtfs_buffer_pa_default = 0x99900000ull;
+		strlcpy(ipa_fw_default, "ipa_fws", sizeof(ipa_fw_default));
+	}
+
+	if (PE_parse_boot_argn("soc_ipa_base", &base, sizeof(base)) && base != 0) {
+		if (ipa_regs.base == 0) { ipa_regs.phys = base; }
+		if (ipa_sram.base == 0) { ipa_sram.phys = base + 0x10000u; }
+		said++;
+	}
+	if (PE_parse_boot_argn("soc_gsi_base", &base, sizeof(base)) && base != 0) {
+		gsi_phys = base;
+		if (gsi_ee0.base == 0) { gsi_ee0.phys = base + 0x12000u; }
+		said++;
+	}
 	for (unsigned i = 0; i < sizeof(blocks) / sizeof(blocks[0]); i++) {
 		uint32_t phys = 0;
 
@@ -6335,8 +6541,8 @@ soc_override(void)
 	PE_parse_boot_argn("soc_pas_mpss", &pas_mpss, sizeof(pas_mpss));
 	PE_parse_boot_argn("soc_pas_ipa", &pas_ipa, sizeof(pas_ipa));
 	if (said != 0 || smem_phys != SMEM_PHYS_DEFAULT || mpss_memory != MPSS_MEMORY_DEFAULT) {
-		printf("mpss: SoC addresses from boot-args: %u register blocks; shared memory %#x, command DB %#x, the modem's "
-		    "memory %#x, the SoC's internal memory %#x\n", said, smem_phys, cmd_db_phys, mpss_memory, ipa_imem);
+		printf("mpss: SoC addresses (%s): %u overrides; shared memory %#x, command DB %#x, modem %#x (%#x bytes), ipa_regs %#x, gsi %#x\n",
+		    mpss_is_cliffs_soc() ? "cliffs" : "default", said, smem_phys, cmd_db_phys, mpss_memory, mpss_memory_size, ipa_regs.phys, gsi_phys);
 	}
 }
 
@@ -6360,7 +6566,7 @@ hakios_mpss_init(void)
 		/* all of it, on a thread of its own, and left up */
 		last_step = STEPS;
 		keep = true;
-		quiet = true;
+		quiet = !option("modem_verbose");
 		pause_ms = 0;
 		listen_seconds = 1;
 		new_from = STEPS + 1;

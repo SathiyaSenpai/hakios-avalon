@@ -47,6 +47,26 @@
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern uint64_t kvtophys(vm_offset_t va);
 extern void FlushPoC_DcacheRegion(vm_offset_t va, size_t length);
+extern int hakios_soc_id(void) __attribute__((weak));
+extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+
+static bool
+ipa_is_cliffs_soc(void)
+{
+	uint32_t soc_smem_arg = 0;
+	char soc_arg[32] = "";
+
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return true;
+	}
+	if (PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000u) {
+		return true;
+	}
+	if (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618)) {
+		return true;
+	}
+	return false;
+}
 
 static LCK_GRP_DECLARE(ipa_lock_group, "hakios-ipa");
 static LCK_MTX_DECLARE(ipa_lock, &ipa_lock_group);
@@ -807,6 +827,10 @@ hakios_ipa_data_setup(void)
 		return false;
 	}
 	if (ipa_regs == 0) {
+		if (ipa_is_cliffs_soc()) {
+			ipa_regs_phys = 0x03e40000ull;
+			gsi_phys = 0x03e04000ull;
+		}
 		PE_parse_boot_argn("soc_ipa_base", &ipa_regs_phys, sizeof(ipa_regs_phys));
 		PE_parse_boot_argn("soc_gsi_base", &gsi_phys, sizeof(gsi_phys));
 		ipa_regs = ml_io_map(ipa_regs_phys, IPA_REGS_SIZE);

@@ -55,6 +55,7 @@ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern void loader_log_putc(char c);
 extern void hakios_spmi_lock(void);
 extern void hakios_spmi_unlock(void);
+extern int hakios_soc_id(void) __attribute__((weak));
 
 SYSCTL_DECL(_kern_hakios);
 
@@ -100,7 +101,7 @@ wr(vm_offset_t address, uint32_t value)
 #define ARB_VERSION_7           0x70000000u
 #define ARB_FEATURES            0x004
 #define ARB_CHANNEL(n)          (0x900 + 4 * (n))               /* [19:8] slave and peripheral */
-#define ARB_MAX_CHANNELS        512
+#define ARB_MAX_CHANNELS        1024
 #define OBSERVER_COMMAND        0x00
 #define OBSERVER_STATUS         0x08
 #define OBSERVER_DATA0          0x18
@@ -112,13 +113,24 @@ wr(vm_offset_t address, uint32_t value)
 #define COMMAND_READ            (1u << 27)
 #define READ_TIMEOUT_US         2000
 
+static bool is_v7 = false;
+static vm_offset_t arb_core_phys = ARB_CORE_PHYS;
+static vm_size_t   arb_core_size = ARB_CORE_SIZE;
+static vm_offset_t arb_observer_phys = ARB_OBSERVER_PHYS;
+static vm_size_t   arb_observer_size = ARB_OBSERVER_SIZE;
+
 static vm_offset_t arb_core, arb_observer;
 
 /* Read `count` (1 to 8) registers of the peripheral at channel `channel`, from register `reg`; NULL, or what went wrong. */
 static const char *
 spmi_read(uint32_t channel, uint8_t reg, uint8_t *bytes, uint32_t count)
 {
-	vm_offset_t ch = arb_observer + 0x10000UL * ARB_SYSTEM + 0x80UL * channel;
+	vm_offset_t ch;
+	if (is_v7) {
+		ch = arb_observer + 0x8000UL * ARB_SYSTEM + 0x20UL * channel;
+	} else {
+		ch = arb_observer + 0x10000UL * ARB_SYSTEM + 0x80UL * channel;
+	}
 	uint64_t start = mach_absolute_time(), now, interval;
 	uint32_t status, data[2];
 
@@ -217,8 +229,20 @@ pmic_run(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	uint16_t ppids[ARB_MAX_CHANNELS];
 	uint16_t channel_of[ARB_MAX_CHANNELS];
 
-	arb_core = ml_io_map(ARB_CORE_PHYS, ARB_CORE_SIZE);
-	arb_observer = ml_io_map(ARB_OBSERVER_PHYS, ARB_OBSERVER_SIZE);
+	uint32_t soc_smem_arg = 0;
+	uint32_t pmic_cliffs = 0;
+	if ((PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000) ||
+	    (PE_parse_boot_argn("pmic_cliffs", &pmic_cliffs, sizeof(pmic_cliffs)) && pmic_cliffs) ||
+	    (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618))) {
+		is_v7 = true;
+		arb_core_phys = 0x0c400000UL;
+		arb_core_size = 0x3000UL;
+		arb_observer_phys = 0x0c440000UL;
+		arb_observer_size = 0x8000UL;
+	}
+
+	arb_core = ml_io_map(arb_core_phys, arb_core_size);
+	arb_observer = ml_io_map(arb_observer_phys, arb_observer_size);
 	if (arb_core == 0 || arb_observer == 0) {
 		say("pmic: could not map the PMIC arbiter\n");
 		goto out;
@@ -226,16 +250,24 @@ pmic_run(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	version = rd(arb_core + ARB_VERSION);
 	channels = rd(arb_core + ARB_FEATURES) & 0x7ff;
 	say("pmic: PMIC arbiter version %#x, %u channels\n", version, channels);
-	if (version < ARB_VERSION_5 || version >= ARB_VERSION_7) {
-		say("pmic: this driver knows version 5 of the arbiter only: nothing read\n");
-		goto out;
+	if (is_v7) {
+		if (version < ARB_VERSION_7) {
+			say("pmic: expected arbiter v7, got %#x: nothing read\n", version);
+			goto out;
+		}
+	} else {
+		if (version < ARB_VERSION_5 || version >= ARB_VERSION_7) {
+			say("pmic: this driver knows version 5 of the arbiter only: nothing read\n");
+			goto out;
+		}
 	}
 	if (channels == 0 || channels > ARB_MAX_CHANNELS) {
 		channels = ARB_MAX_CHANNELS;
 	}
 	/* one entry for each distinct slave/peripheral, with the first channel that reaches it */
 	for (uint32_t n = 0; n < channels; n++) {
-		uint32_t map = rd(arb_core + ARB_CHANNEL(n));
+		uint32_t map_reg = is_v7 ? (0x2000 + 4 * n) : ARB_CHANNEL(n);
+		uint32_t map = rd(arb_core + map_reg);
 		uint16_t ppid = (uint16_t)((map >> 8) & 0xfff);
 		bool again = false;
 

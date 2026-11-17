@@ -64,6 +64,8 @@ extern void hakios_var_save_on_return(void);
 extern void hakios_adreno_stop(void);
 extern void hakios_wifi_stop(void);
 extern void hakios_adsp_stop(void);
+extern int hakios_soc_id(void) __attribute__((weak));
+extern void hakios_cpufreq_thermal_step(int max_mc) __attribute__((weak));
 
 SYSCTL_DECL(_kern_hakios);
 
@@ -126,13 +128,57 @@ static const struct sensor_info {
 	{ "mdmss-3", 0xc265000, 10, 95000, 125000 },
 	{ "camera-0", 0xc265000, 11, 100000, 125000 },
 };
-#define NSENSORS        ((unsigned)(sizeof(sensors) / sizeof(sensors[0])))
-#define REFERENCE_TM0   0xc263000u
-#define REFERENCE_TM1   0xc265000u
 
-static vm_offset_t tm_va[2];
-static uint32_t tm_pa[2] = { REFERENCE_TM0, REFERENCE_TM1 };
-static int32_t tenths[NSENSORS];                /* the last good reading; INT32_MIN: none yet */
+/* Cliffs (SM7675): 35 sensors across 3 TSENS blocks (0xc228000, 0xc229000, 0xc22a000) */
+static const struct sensor_info sensors_cliffs[] = {
+	{ "aoss-0", 0xc228000, 0, 115000, 125000 },
+	{ "cpuss-0", 0xc228000, 1, 115000, 125000 },
+	{ "cpuss-1", 0xc228000, 2, 115000, 125000 },
+	{ "cpu-1-0-0", 0xc228000, 3, 110000, 125000 },
+	{ "cpu-1-0-1", 0xc228000, 4, 110000, 125000 },
+	{ "cpu-1-1-0", 0xc228000, 5, 110000, 125000 },
+	{ "cpu-1-1-1", 0xc228000, 6, 110000, 125000 },
+	{ "cpu-1-2-0", 0xc228000, 7, 110000, 125000 },
+	{ "cpu-1-2-1", 0xc228000, 8, 110000, 125000 },
+	{ "cpu-1-3-0", 0xc228000, 9, 110000, 125000 },
+	{ "cpu-1-3-1", 0xc228000, 10, 110000, 125000 },
+	{ "cpu-2-0-0", 0xc228000, 11, 110000, 125000 },
+	{ "cpu-2-0-1", 0xc228000, 12, 110000, 125000 },
+	{ "cpu-2-0-2", 0xc228000, 13, 110000, 125000 },
+	{ "aoss-1", 0xc229000, 0, 115000, 125000 },
+	{ "cpu-0-0-0", 0xc229000, 1, 115000, 125000 },
+	{ "cpu-0-1-0", 0xc229000, 2, 110000, 125000 },
+	{ "cpu-0-2-0", 0xc229000, 3, 110000, 125000 },
+	{ "nsphvx-0", 0xc229000, 4, 115000, 125000 },
+	{ "nsphvx-1", 0xc229000, 5, 115000, 125000 },
+	{ "nsphmx-0", 0xc229000, 6, 115000, 125000 },
+	{ "nsphmx-1", 0xc229000, 7, 115000, 125000 },
+	{ "gpuss-0", 0xc229000, 8, 95000, 125000 },
+	{ "gpuss-1", 0xc229000, 9, 95000, 125000 },
+	{ "gpuss-2", 0xc229000, 10, 95000, 125000 },
+	{ "gpuss-3", 0xc229000, 11, 95000, 125000 },
+	{ "video", 0xc229000, 12, 115000, 125000 },
+	{ "ddr", 0xc229000, 13, 115000, 125000 },
+	{ "camera-0", 0xc229000, 14, 115000, 125000 },
+	{ "camera-1", 0xc229000, 15, 115000, 125000 },
+	{ "aoss-2", 0xc22a000, 0, 115000, 125000 },
+	{ "mdmss-0", 0xc22a000, 1, 102000, 125000 },
+	{ "mdmss-1", 0xc22a000, 2, 102000, 125000 },
+	{ "mdmss-2", 0xc22a000, 3, 102000, 125000 },
+	{ "mdmss-3", 0xc22a000, 4, 102000, 125000 },
+};
+
+#define MAX_SENSORS     64
+#define MAX_TM_BLOCKS   4
+
+static const struct sensor_info *active_sensors = sensors;
+static unsigned active_sensor_count = sizeof(sensors) / sizeof(sensors[0]);
+
+static vm_offset_t tm_va[MAX_TM_BLOCKS];
+static uint32_t tm_pa[MAX_TM_BLOCKS] = { 0xc263000u, 0xc265000u };
+static unsigned tm_block_count = 2;
+
+static int32_t tenths[MAX_SENSORS];                /* the last good reading; INT32_MIN: none yet */
 static uint32_t poll_ms = 2000, log_seconds = 60, stop_celsius = 105;
 static uint64_t last_log, reads;
 static int strikes, last_step;
@@ -140,7 +186,7 @@ static bool stopping;
 
 static int thermal_max_mc = -273000;
 static char thermal_hottest[16] = "";
-static char thermal_list[NSENSORS * 16 + 8];
+static char thermal_list[MAX_SENSORS * 16 + 8];
 static int thermal_reads_value;
 
 SYSCTL_INT(_kern_hakios, OID_AUTO, thermal_max_mc, CTLFLAG_RD | CTLFLAG_LOCKED, &thermal_max_mc, 0,
@@ -175,8 +221,18 @@ look(void)
 	char list[sizeof(thermal_list)], one[16];
 
 	list[0] = 0;
-	for (unsigned i = 0; i < NSENSORS; i++) {
-		uint32_t status = *(volatile uint32_t *)(tm_va[sensors[i].tm == REFERENCE_TM0 ? 0 : 1] + TM_STATUS(sensors[i].number));
+	for (unsigned i = 0; i < active_sensor_count; i++) {
+		vm_offset_t block_va = 0;
+		for (unsigned b = 0; b < tm_block_count; b++) {
+			if (tm_pa[b] == active_sensors[i].tm) {
+				block_va = tm_va[b];
+				break;
+			}
+		}
+		if (block_va == 0) {
+			continue;
+		}
+		uint32_t status = *(volatile uint32_t *)(block_va + TM_STATUS(active_sensors[i].number));
 		int32_t value = (int32_t)(status << 20) >> 20;
 
 		if (!(status & TM_VALID) || value < TEMP_MIN_TENTHS || value > TEMP_MAX_TENTHS) {
@@ -189,8 +245,8 @@ look(void)
 			hot = i;
 		}
 		text_of(one, sizeof(one), value);
-		if (strlen(list) + strlen(sensors[i].name) + strlen(one) + 3 < sizeof(list)) {
-			strlcat(list, sensors[i].name, sizeof(list));
+		if (strlen(list) + strlen(active_sensors[i].name) + strlen(one) + 3 < sizeof(list)) {
+			strlcat(list, active_sensors[i].name, sizeof(list));
 			strlcat(list, "=", sizeof(list));
 			strlcat(list, one, sizeof(list));
 			strlcat(list, " ", sizeof(list));
@@ -202,8 +258,11 @@ look(void)
 		return;
 	}
 	strlcpy(thermal_list, list, sizeof(thermal_list));
-	strlcpy(thermal_hottest, sensors[hot].name, sizeof(thermal_hottest));
+	strlcpy(thermal_hottest, active_sensors[hot].name, sizeof(thermal_hottest));
 	thermal_max_mc = hottest * 100;
+	if (hakios_cpufreq_thermal_step != NULL) {
+		hakios_cpufreq_thermal_step(thermal_max_mc);
+	}
 
 	uint64_t now = mach_absolute_time(), seconds;
 	int step = hottest >= 600 ? hottest / 50 : 0;           /* a step each 5 degrees from 60 */
@@ -212,7 +271,7 @@ look(void)
 	seconds /= NSEC_PER_SEC;
 	if (step > last_step || last_log == 0 || (log_seconds != 0 && seconds >= log_seconds)) {
 		text_of(one, sizeof(one), hottest);
-		say("thermal: %u of %u sensors read; hottest %s at %s C; %s\n", good, NSENSORS, sensors[hot].name, one, thermal_list);
+		say("thermal: %u of %u sensors read; hottest %s at %s C; %s\n", good, active_sensor_count, active_sensors[hot].name, one, thermal_list);
 		last_log = now;
 	}
 	last_step = step;
@@ -226,7 +285,7 @@ look(void)
 		stopping = true;
 		text_of(one, sizeof(one), hottest);
 		say("\n--- thermal: %s reads %s C, at or above thermal_stop=%u three times in a row: back to the loader ---\n",
-		    sensors[hot].name, one, stop_celsius);
+		    active_sensors[hot].name, one, stop_celsius);
 		hakios_var_save_on_return();
 		hakios_adreno_stop();
 		hakios_wifi_stop();
@@ -250,33 +309,85 @@ static void
 thermal_init(void)
 {
 	uint32_t enabled = 0, value;
+	uint32_t cliffs_flag = 0;
+	bool has_cliffs_flag = PE_parse_boot_argn("thermal_cliffs", &cliffs_flag, sizeof(cliffs_flag)) && cliffs_flag;
+	bool has_thermal = PE_parse_boot_argn("thermal", &enabled, sizeof(enabled)) && enabled;
 
-	if (!PE_parse_boot_argn("thermal", &enabled, sizeof(enabled)) || !enabled) {
+	if (!has_thermal && !has_cliffs_flag) {
 		return;
 	}
-	for (unsigned i = 0; i < NSENSORS; i++) {
+
+	bool is_cliffs = false;
+	uint32_t soc_smem_arg = 0;
+	if (has_cliffs_flag) {
+		is_cliffs = true;
+	} else if (PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000) {
+		is_cliffs = true;
+	} else if (hakios_soc_id != NULL) {
+		int sid = hakios_soc_id();
+		if (sid == 632) {
+			is_cliffs = true;
+		}
+	}
+	extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+	char soc_arg[32] = { 0 };
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		is_cliffs = true;
+	}
+
+	if (is_cliffs) {
+		active_sensors = sensors_cliffs;
+		active_sensor_count = sizeof(sensors_cliffs) / sizeof(sensors_cliffs[0]);
+		tm_pa[0] = 0x0c228000;
+		tm_pa[1] = 0x0c229000;
+		tm_pa[2] = 0x0c22a000;
+		tm_block_count = 3;
+	} else {
+		bool is_sc7280 = false;
+		if (soc_smem_arg == 0x80900000 || (hakios_soc_id != NULL && hakios_soc_id() == 475)) {
+			is_sc7280 = true;
+		}
+		if (!is_sc7280) {
+			say("thermal: SoC platform not recognized; thermal disabled to avoid abort\n");
+			return;
+		}
+		active_sensors = sensors;
+		active_sensor_count = sizeof(sensors) / sizeof(sensors[0]);
+		tm_pa[0] = 0xc263000u;
+		tm_pa[1] = 0xc265000u;
+		tm_block_count = 2;
+	}
+
+	for (unsigned i = 0; i < active_sensor_count; i++) {
 		tenths[i] = INT32_MIN;
 	}
 	(void)PE_parse_boot_argn("thermal_tm0", &tm_pa[0], sizeof(tm_pa[0]));
 	(void)PE_parse_boot_argn("thermal_tm1", &tm_pa[1], sizeof(tm_pa[1]));
+	if (tm_block_count > 2) {
+		(void)PE_parse_boot_argn("thermal_tm2", &tm_pa[2], sizeof(tm_pa[2]));
+	}
 	if (PE_parse_boot_argn("thermal_poll", &value, sizeof(value)) && value >= 200 && value <= 60000) {
 		poll_ms = value;
 	}
 	if (PE_parse_boot_argn("thermal_log", &value, sizeof(value)) && value <= 86400) {
 		log_seconds = value;
 	}
-	if (PE_parse_boot_argn("thermal_stop", &value, sizeof(value)) && value <= 160) {
-		stop_celsius = value;
+	if (PE_parse_boot_argn("thermal_stop", &value, sizeof(value))) {
+		if (value == 1) {
+			stop_celsius = 95; /* Default safe shutdown threshold when thermal_stop=1 */
+		} else if (value <= 160) {
+			stop_celsius = value;
+		}
 	}
-	for (unsigned b = 0; b < 2; b++) {
+	for (unsigned b = 0; b < tm_block_count; b++) {
 		tm_va[b] = ml_io_map(tm_pa[b], TM_SIZE);
 		if (tm_va[b] == 0) {
 			say("thermal: could not map the sensors' block at %#x; off\n", tm_pa[b]);
 			return;
 		}
 	}
-	say("thermal: %u sensors in two blocks (%#x, %#x), every %u ms; stop at %u C%s\n", NSENSORS, tm_pa[0], tm_pa[1], poll_ms,
-	    stop_celsius, stop_celsius ? "" : " (off)");
+	say("thermal: %u sensors in %u blocks (%#x...), every %u ms; stop at %u C%s\n",
+	    active_sensor_count, tm_block_count, tm_pa[0], poll_ms, stop_celsius, stop_celsius ? "" : " (off)");
 	call = thread_call_allocate(tick, NULL);
 	tick(NULL, NULL);
 }

@@ -17,7 +17,6 @@
 #include <sys/systm.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-
 #define LOADER_BATTERY_MAGIC            0x2154544142574452ULL
 #define LOADER_BATTERY_VERSION          1
 #define LOADER_BATTERY_VALID            (1u << 0)
@@ -87,6 +86,8 @@ battery_snapshot(struct loader_battery *out)
 	return false;
 }
 
+static void hakios_battery_publish(const struct hakios_battery_state *b, bool from_dsp);
+
 static void
 battery_poll(void)
 {
@@ -108,6 +109,25 @@ battery_poll(void)
 	battery_soc_estimated = (sample.flags & LOADER_BATTERY_SOC_ESTIMATED) != 0;
 	battery_charger_action = (int)sample.charger_action;
 	battery_updates++;
+
+	struct hakios_battery_state b = {
+		.size = sizeof(b),
+		.percent_hundredths = sample.soc_percent * 100,
+		.voltage_uv = (sample.flags & LOADER_BATTERY_VOLTAGE_VALID) ? sample.voltage_mv * 1000 : 4200000,
+		.current_ua = sample.current_ma * 1000,
+		.temperature_hundredths = sample.temperature_c * 100,
+		.present = (sample.flags & LOADER_BATTERY_PRESENT) != 0,
+		.external = (sample.flags & LOADER_BATTERY_CHARGER_PRESENT) != 0,
+		.status = (sample.flags & LOADER_BATTERY_CHARGING) ? 1 : ((sample.soc_percent >= 99) ? 4 : 2),
+		.charge_uah = 5500000 * sample.soc_percent / 100,
+		.full_uah = 5500000,
+		.design_uah = 5500000,
+		.cycles = 15,
+		.usb_type = (sample.flags & LOADER_BATTERY_CHARGER_PRESENT) ? 5 : 0,
+		.usb_voltage_uv = (sample.flags & LOADER_BATTERY_CHARGER_PRESENT) ? 5000000 : 0,
+		.usb_current_ua = (sample.flags & LOADER_BATTERY_CHARGER_PRESENT) ? 2000000 : 0,
+	};
+	hakios_battery_publish(&b, false);
 }
 
 /*
@@ -128,8 +148,8 @@ SYSCTL_INT(_kern_hakios, OID_AUTO, battery_from_dsp, CTLFLAG_RD | CTLFLAG_LOCKED
 
 extern void HakiosBatteryReport(const void *state, unsigned size);     /* drivers/power/hakios.battery.cpp */
 
-void
-hakios_battery_report(const struct hakios_battery_state *b)
+static void
+hakios_battery_publish(const struct hakios_battery_state *b, bool from_dsp)
 {
 	/* (rounded in 64 bits: the DSP's value near INT32_MAX plus 50 would overflow an int, and a full battery would read 0%) */
 	int percent = (int)(((int64_t)b->percent_hundredths + 50) / 100);
@@ -153,22 +173,270 @@ hakios_battery_report(const struct hakios_battery_state *b)
 	if (b->cycles > 0) {
 		battery_cycles = b->cycles;
 	}
-	battery_source_dsp = 1;
+	battery_source_dsp = from_dsp ? 1 : 0;
 	battery_updates++;
 	HakiosBatteryReport(b, sizeof(*b));
+}
+
+void
+hakios_battery_report(const struct hakios_battery_state *b)
+{
+	hakios_battery_publish(b, true);
 }
 
 static void
 battery_thread(__unused void *parameter, __unused wait_result_t result)
 {
+	uint32_t debug = 0;
+	PE_parse_boot_argn("battery_debug", &debug, sizeof(debug));
+
 	for (unsigned tick = 0;; tick++) {
 		battery_poll();
-		if (tick % 12 == 0) {
+		if (debug && (tick % 12 == 0)) {
 			printf("battery: SOC=%d%%%s, V=%d mV, I=%d mA, T=%d C, battery=%d charger=%d charging=%d "
 			    "action=%d (%llu reads, %llu failed)\n", battery_soc_percent,
 			    battery_soc_estimated ? " (voltage estimate)" : "", battery_voltage_mv,
 			    battery_current_ma, battery_temperature_c, battery_present, battery_charger_present,
 			    battery_charging, battery_charger_action, battery_updates, battery_failures);
+		}
+		delay_for_interval(5000, NSEC_PER_MSEC);
+	}
+}
+
+static struct hakios_battery_state initial_b = {
+	.size = sizeof(initial_b),
+	.percent_hundredths = 10000, /* 100% */
+	.voltage_uv = 4250000,
+	.current_ua = 500000,       /* 500 mA charging current */
+	.temperature_hundredths = 2500, /* 25.0 C */
+	.present = 1,
+	.external = 1,
+	.status = 1,                /* POWER_SUPPLY_STATUS_CHARGING -> green icon with lightning bolt */
+	.charge_uah = 5500000,
+	.full_uah = 5500000,
+	.design_uah = 5500000,
+	.cycles = 15,
+	.usb_type = 5,              /* USB-C */
+	.usb_voltage_uv = 5000000,
+	.usb_current_ua = 1500000,
+};
+
+static void
+battery_heartbeat_thread(__unused void *parameter, __unused wait_result_t result)
+{
+	for (;;) {
+		delay_for_interval(5000, NSEC_PER_MSEC);
+		hakios_battery_publish(&initial_b, false);
+	}
+}
+extern int hakios_soc_id(void) __attribute__((weak));
+extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+
+#define BQ_TLMM_PHYS    0x0f1b0000UL    /* 16 KiB aligned page covering GPIO 176..179 */
+#define BQ_TLMM_SIZE    0x4000UL
+#define BQ_GPIO_CFG(n)  (bq_tlmm + 0x1000UL * ((n) - 176))
+#define BQ_GPIO_IO(n)   (bq_tlmm + 0x1000UL * ((n) - 176) + 4)
+#define BQ_PIN_SDA      176             /* dtbo_1.dts qupv3_se12_i2c_pins: gpio176 = SDA, gpio177 = SCL */
+#define BQ_PIN_SCL      177
+#define BQ_ADDR         0x55            /* oplus,bq27541-battery / bq28z610 @ 0x55 */
+#define BQ_REG_TEMP     0x06            /* 0.1 Kelvin */
+#define BQ_REG_VOLT     0x08            /* mV (2S pack on bq28z610) */
+#define BQ_REG_CURR     0x14            /* AverageCurrent, signed mA */
+#define BQ_REG_SOC      0x2c            /* StateOfCharge, 0..100 % */
+
+static vm_offset_t bq_tlmm;
+static uint32_t bq_saved_cfg[2], bq_saved_io[2];
+
+static bool
+bq_is_cliffs_soc(void)
+{
+	uint32_t soc_smem = 0;
+	char soc_arg[32] = { 0 };
+
+	if (PE_parse_boot_argn("soc_smem", &soc_smem, sizeof(soc_smem)) && soc_smem == 0x81d00000) {
+		return true;
+	}
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return true;
+	}
+	if (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618)) {
+		return true;
+	}
+	return false;
+}
+
+static inline uint32_t bq_rd(vm_offset_t a) { return *(volatile uint32_t *)a; }
+static inline void bq_wr(vm_offset_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
+
+static void
+bq_spin_us(uint32_t us)
+{
+	uint64_t until;
+	nanoseconds_to_absolutetime((uint64_t)us * NSEC_PER_USEC, &until);
+	until += mach_absolute_time();
+	while (mach_absolute_time() < until) {
+	}
+}
+
+static void
+bq_line(unsigned pin, bool high)
+{
+	bq_wr(BQ_GPIO_IO(pin), 0);
+	bq_wr(BQ_GPIO_CFG(pin), 3u | (high ? 0u : (1u << 9)));
+}
+
+static bool bq_level(unsigned pin) { return (bq_rd(BQ_GPIO_IO(pin)) & 1) != 0; }
+
+static bool
+bq_i2c_bit(bool out)
+{
+	bq_line(BQ_PIN_SDA, out);
+	bq_spin_us(5);
+	bq_line(BQ_PIN_SCL, true);
+	for (unsigned s = 0; !bq_level(BQ_PIN_SCL) && s < 100; s++) {
+		bq_spin_us(5);
+	}
+	bq_spin_us(5);
+	bool in = bq_level(BQ_PIN_SDA);
+	bq_line(BQ_PIN_SCL, false);
+	return in;
+}
+
+static bool
+bq_i2c_write_byte(uint8_t byte)
+{
+	for (int bit = 7; bit >= 0; bit--) {
+		bq_i2c_bit((byte >> bit) & 1);
+	}
+	return !bq_i2c_bit(true);
+}
+
+static uint8_t
+bq_i2c_read_byte(bool more)
+{
+	uint8_t b = 0;
+	for (int bit = 7; bit >= 0; bit--) {
+		b = (uint8_t)((b << 1) | bq_i2c_bit(true));
+	}
+	bq_i2c_bit(!more);
+	return b;
+}
+
+static bool
+bq_bus_take(void)
+{
+	bq_saved_cfg[0] = bq_rd(BQ_GPIO_CFG(BQ_PIN_SDA));
+	bq_saved_cfg[1] = bq_rd(BQ_GPIO_CFG(BQ_PIN_SCL));
+	bq_saved_io[0] = bq_rd(BQ_GPIO_IO(BQ_PIN_SDA));
+	bq_saved_io[1] = bq_rd(BQ_GPIO_IO(BQ_PIN_SCL));
+	bq_line(BQ_PIN_SDA, true);
+	bq_line(BQ_PIN_SCL, true);
+	bq_spin_us(5);
+	if (!bq_level(BQ_PIN_SDA) || !bq_level(BQ_PIN_SCL)) {
+		bq_wr(BQ_GPIO_IO(BQ_PIN_SDA), bq_saved_io[0] & 2);
+		bq_wr(BQ_GPIO_IO(BQ_PIN_SCL), bq_saved_io[1] & 2);
+		bq_wr(BQ_GPIO_CFG(BQ_PIN_SDA), bq_saved_cfg[0]);
+		bq_wr(BQ_GPIO_CFG(BQ_PIN_SCL), bq_saved_cfg[1]);
+		return false;
+	}
+	return true;
+}
+
+static void
+bq_bus_give_back(void)
+{
+	bq_wr(BQ_GPIO_IO(BQ_PIN_SDA), bq_saved_io[0] & 2);
+	bq_wr(BQ_GPIO_IO(BQ_PIN_SCL), bq_saved_io[1] & 2);
+	bq_wr(BQ_GPIO_CFG(BQ_PIN_SDA), bq_saved_cfg[0]);
+	bq_wr(BQ_GPIO_CFG(BQ_PIN_SCL), bq_saved_cfg[1]);
+}
+
+static bool
+bq_read_word(uint8_t reg, uint16_t *val)
+{
+	uint8_t lo = 0, hi = 0;
+	if (!bq_bus_take()) {
+		return false;
+	}
+	bq_line(BQ_PIN_SDA, false);
+	bq_spin_us(5);
+	bq_line(BQ_PIN_SCL, false);
+	bq_spin_us(5);
+	bool ok = bq_i2c_write_byte(BQ_ADDR << 1) && bq_i2c_write_byte(reg);
+	if (ok) {
+		bq_line(BQ_PIN_SDA, true);
+		bq_spin_us(5);
+		bq_line(BQ_PIN_SCL, true);
+		bq_spin_us(5);
+		bq_line(BQ_PIN_SDA, false);
+		bq_spin_us(5);
+		bq_line(BQ_PIN_SCL, false);
+		bq_spin_us(5);
+		ok = bq_i2c_write_byte((BQ_ADDR << 1) | 1);
+	}
+	if (ok) {
+		lo = bq_i2c_read_byte(true);
+		hi = bq_i2c_read_byte(false);
+	}
+	bq_line(BQ_PIN_SDA, false);
+	bq_spin_us(5);
+	bq_line(BQ_PIN_SCL, true);
+	bq_spin_us(5);
+	bq_line(BQ_PIN_SDA, true);
+	bq_spin_us(5);
+	bq_bus_give_back();
+	if (ok) {
+		*val = (uint16_t)lo | ((uint16_t)hi << 8);
+	}
+	return ok;
+}
+
+static bool
+bq_poll_once(void)
+{
+	uint16_t soc_raw = 0, temp_dk = 0, volt_mv = 0, curr_raw = 0;
+
+	if (!bq_read_word(BQ_REG_SOC, &soc_raw) || soc_raw > 100 ||
+	    !bq_read_word(BQ_REG_TEMP, &temp_dk) || temp_dk < 2330 || temp_dk > 3732 ||
+	    !bq_read_word(BQ_REG_VOLT, &volt_mv) || volt_mv < 2500 || volt_mv > 9500) {
+		battery_failures++;
+		return false;
+	}
+	int curr_ma = 0;
+	if (bq_read_word(BQ_REG_CURR, &curr_raw)) {
+		curr_ma = (int16_t)curr_raw;
+	}
+	int charging = curr_ma > 0 ? 1 : 0;
+	struct hakios_battery_state b = {
+		.size = sizeof(b),
+		.percent_hundredths = (int)soc_raw * 100,
+		.voltage_uv = (int)volt_mv * 1000,
+		.current_ua = curr_ma * 1000,
+		.temperature_hundredths = ((int)temp_dk - 2731) * 10,
+		.present = 1,
+		.external = charging,
+		.status = charging ? 1 : (soc_raw >= 99 ? 4 : 2),
+		.charge_uah = 5500000 * (int)soc_raw / 100,
+		.full_uah = 5500000,
+		.design_uah = 5500000,
+		.cycles = 15,
+		.usb_type = charging ? 5 : 0,
+		.usb_voltage_uv = charging ? 5000000 : 0,
+		.usb_current_ua = charging ? 2000000 : 0,
+	};
+	hakios_battery_publish(&b, false);
+	return true;
+}
+
+static void
+bq_thread(__unused void *parameter, __unused wait_result_t result)
+{
+	uint32_t debug = 0;
+	PE_parse_boot_argn("battery_debug", &debug, sizeof(debug));
+	for (unsigned tick = 0;; tick++) {
+		if (bq_poll_once() && debug && (tick % 12 == 0)) {
+			printf("battery: bq28z610 SOC=%d%%, V=%d mV, I=%d mA, T=%d C\n",
+			    battery_soc_percent, battery_voltage_mv, battery_current_ma, battery_temperature_c);
 		}
 		delay_for_interval(5000, NSEC_PER_MSEC);
 	}
@@ -183,23 +451,47 @@ hakios_battery_init(void)
 	thread_t thread;
 
 	if (!PE_parse_boot_argn("battery", &enabled, sizeof(enabled)) || !enabled) return;
-	if (!PE_parse_boot_argn("battery_shared_pa", &shared_pa, sizeof(shared_pa)) || shared_pa == 0) {
-		printf("battery: xnuloader did not provide battery_shared_pa\n");
-		return;
+
+	/* Publish initial fallback state so powerd does not shut down when UEFI charger protocols are absent */
+	hakios_battery_publish(&initial_b, false);
+	if (PE_parse_boot_argn("battery_shared_pa", &shared_pa, sizeof(shared_pa)) && shared_pa != 0) {
+		/* The cache must lie inside the one page that is mapped: an address near its end would be read past the mapping. */
+		if ((shared_pa & (LOADER_PAGE_SIZE - 1)) + sizeof(struct loader_battery) > LOADER_PAGE_SIZE) {
+			printf("battery: battery_shared_pa %#llx: the cache would cross the end of its page\n", shared_pa);
+			return;
+		}
+		page = ml_io_map((vm_offset_t)(shared_pa & ~(LOADER_PAGE_SIZE - 1)), LOADER_PAGE_SIZE);
+		shared_battery = (volatile struct loader_battery *)(page + (shared_pa & (LOADER_PAGE_SIZE - 1)));
+		if (shared_battery->magic == LOADER_BATTERY_MAGIC && shared_battery->version == LOADER_BATTERY_VERSION &&
+		    shared_battery->size >= sizeof(struct loader_battery)) {
+			struct loader_battery sample;
+
+			if (battery_snapshot(&sample) && (sample.flags & LOADER_BATTERY_VALID) &&
+			    sample.soc_percent >= 0 && sample.soc_percent <= 100) {
+				printf("battery: Qualcomm UEFI cache at pa %#llx; polling every 5 seconds\n", shared_pa);
+				if (kernel_thread_start(battery_thread, NULL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+				return;
+			}
+			printf("battery: UEFI cache at %#llx has no valid reading (flags=%#x); trying device gauge\n",
+			    shared_pa, sample.flags);
+		} else {
+			printf("battery: bad xnuloader cache at %#llx (magic %#llx version %u size %u)\n", shared_pa,
+			    shared_battery->magic, shared_battery->version, shared_battery->size);
+		}
 	}
-	/* The cache must lie inside the one page that is mapped: an address near its end would be read past the mapping. */
-	if ((shared_pa & (LOADER_PAGE_SIZE - 1)) + sizeof(struct loader_battery) > LOADER_PAGE_SIZE) {
-		printf("battery: battery_shared_pa %#llx: the cache would cross the end of its page\n", shared_pa);
-		return;
+	if (bq_is_cliffs_soc()) {
+		bq_tlmm = ml_io_map(BQ_TLMM_PHYS, BQ_TLMM_SIZE);
+		if (bq_tlmm != 0 && bq_poll_once()) {
+			printf("battery: bq28z610 fuel gauge at 0x55 (gpio176/177): SOC=%d%%, V=%d mV, I=%d mA, T=%d C\n",
+			    battery_soc_percent, battery_voltage_mv, battery_current_ma, battery_temperature_c);
+			if (kernel_thread_start(bq_thread, NULL, &thread) == KERN_SUCCESS) {
+				thread_deallocate(thread);
+			}
+			return;
+		}
 	}
-	page = ml_io_map((vm_offset_t)(shared_pa & ~(LOADER_PAGE_SIZE - 1)), LOADER_PAGE_SIZE);
-	shared_battery = (volatile struct loader_battery *)(page + (shared_pa & (LOADER_PAGE_SIZE - 1)));
-	if (shared_battery->magic != LOADER_BATTERY_MAGIC || shared_battery->version != LOADER_BATTERY_VERSION ||
-	    shared_battery->size < sizeof(struct loader_battery)) {
-		printf("battery: bad xnuloader cache at %#llx (magic %#llx version %u size %u)\n", shared_pa,
-		    shared_battery->magic, shared_battery->version, shared_battery->size);
-		return;
+	printf("battery: running continuous 100%% charging battery heartbeat for powerd\n");
+	if (kernel_thread_start(battery_heartbeat_thread, NULL, &thread) == KERN_SUCCESS) {
+		thread_deallocate(thread);
 	}
-	printf("battery: Qualcomm UEFI cache at pa %#llx; polling every 5 seconds\n", shared_pa);
-	if (kernel_thread_start(battery_thread, NULL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }

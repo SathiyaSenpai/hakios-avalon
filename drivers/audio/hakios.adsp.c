@@ -105,6 +105,26 @@ extern kern_return_t thread_terminate(thread_t thread);
 extern vm_offset_t pe_arm_get_soc_base_phys(void);
 extern dev_t mdevlookup(int devid);
 extern int mdevgetkernelrange(dev_t dev, vm_offset_t *base, uint64_t *size);
+extern int hakios_soc_id(void) __attribute__((weak));
+extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+
+static bool
+adsp_is_cliffs_soc(void)
+{
+	uint32_t soc_smem_arg = 0;
+	char soc_arg[32] = "";
+
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return true;
+	}
+	if (PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000u) {
+		return true;
+	}
+	if (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618)) {
+		return true;
+	}
+	return false;
+}
 
 /* What the Wi-Fi's DSP and this one both use (hakios.wifi.c). */
 extern lck_mtx_t hakios_aop_mailbox_lock;
@@ -287,7 +307,8 @@ put(struct block *b, const char *name, uint32_t offset, uint32_t value)
 
 /* ---- the shared memory (hakios.wifi.c, step 1) --------------------------------------------------- */
 
-#define SMEM_PHYS               0x80900000UL
+static unsigned long smem_phys = 0x80900000UL;
+#define SMEM_PHYS               smem_phys
 #define SMEM_SIZE               0x00200000u
 #define SMEM_US                 0
 #define SMEM_ADSP               2               /* dt: qcom,remote-pid of qcom,smp2p-adsp and qcom,glink/adsp */
@@ -794,7 +815,8 @@ out:
  * the list of its levels that the boot loader's command database keeps (cmd-db.c), the first
  * position at or above the level wanted.
  */
-#define CMD_DB_PHYS             0x80860000UL
+static unsigned long cmd_db_phys = 0x80860000UL;
+#define CMD_DB_PHYS             cmd_db_phys
 #define CMD_DB_SIZE             0x20000UL
 
 struct cmd_db_slave {
@@ -821,15 +843,46 @@ static struct block rsc = { "rsc", 0x18220000, 0x10000 };
 #define RSC_IRQ_STATUS          (RSC_TCS_BASE + 0x04)   /* a bit per TCS: done */
 #define RSC_IRQ_CLEAR           (RSC_TCS_BASE + 0x08)
 #define RSC_TCS(n)              (RSC_TCS_BASE + 672 * (n))
-#define TCS_WAIT_FOR_DONE       0x10
-#define TCS_CONTROL             0x14
-#define TCS_STATUS              0x18                    /* not zero: idle */
-#define TCS_ENABLED             0x1c
-#define TCS_COMMAND(c)          (0x30 + 20 * (c))       /* message id, address, value, status */
+static uint32_t rpmh_tcs_id = 0;        /* 0 on SM7325 (v2.7), 3 (ACTIVE TCS) on SM7675 Cliffs (v3.2) */
+static uint32_t tcs_reg_wait = 0x10;
+static uint32_t tcs_reg_control = 0x14;
+static uint32_t tcs_reg_status = 0x18;
+static uint32_t tcs_reg_enable = 0x1c;
+static uint32_t tcs_cmd_stride = 20;
+static uint32_t tcs_cmd_msgid = 0x30;
+static bool rsc_inited;
+#define TCS_WAIT_FOR_DONE       tcs_reg_wait
+#define TCS_CONTROL             tcs_reg_control
+#define TCS_STATUS              tcs_reg_status
+#define TCS_ENABLED             tcs_reg_enable
+#define TCS_COMMAND(c)          (tcs_cmd_msgid + tcs_cmd_stride * (c))
 #define TCS_ACTIVE_MODE         (1u << 16)
 #define TCS_TRIGGER             (1u << 24)
 #define MSGID_WRITE_WAITED      (8u | 1u << 8 | 1u << 16)       /* four bytes, an answer wanted, a write */
-#define RPMH_TCS                0                       /* the first of the two for requests made at once */
+#define RPMH_TCS                rpmh_tcs_id
+
+static void
+rsc_init_offsets(void)
+{
+	uint32_t rsc_id, major;
+
+	if (rsc_inited) {
+		return;
+	}
+	need(&rsc);
+	rsc_id = rd(rsc.base + 0);
+	major = (rsc_id >> 16) & 0xff;
+	if (major >= 3) {
+		rpmh_tcs_id = 3;
+		tcs_reg_wait = 0x20;
+		tcs_reg_control = 0x24;
+		tcs_reg_status = 0x28;
+		tcs_reg_enable = 0x2c;
+		tcs_cmd_stride = 24;
+		tcs_cmd_msgid = 0x34;
+	}
+	rsc_inited = true;
+}
 
 /* The level position RPMh takes for that rail and level; -1: not found. */
 static int
@@ -912,6 +965,7 @@ rails(uint32_t level)
 	if (!leaving) {
 		lck_mtx_lock(&hakios_rsc_lock);
 	}
+	rsc_init_offsets();
 	/* (the boot loader leaves the trigger set after its last request, done: idle is what the status says) */
 	if (rd(rsc.base + RSC_TCS(RPMH_TCS) + TCS_STATUS) == 0) {
 		printf("adsp: %u: TCS %u of the sequencer is busy (status %#x, control %#x): the rails are not asked\n", step, RPMH_TCS,
@@ -983,8 +1037,10 @@ step_survey(void)
 
 /* ---- step 2: the firmware -------------------------------------------------------------------------- */
 
-#define ADSP_MEMORY             0x86700000u     /* dt: reserved-memory adsp@86700000, memory-region of qcom,lpass@3700000 */
-#define ADSP_MEMORY_SIZE        0x04000000u
+static uint32_t adsp_memory = 0x86700000u;
+static uint32_t adsp_memory_size = 0x04000000u;
+#define ADSP_MEMORY             adsp_memory
+#define ADSP_MEMORY_SIZE        adsp_memory_size
 #define PAS_ADSP                1               /* dt: qcom,pas-id */
 
 
@@ -1079,7 +1135,7 @@ image_file(const char *name, uint64_t *size)
 
 
 #define MDT_HASH(flags)         (((flags) >> 24 & 7) == 2)
-#define MAX_SEGMENTS            48
+#define MAX_SEGMENTS            64
 
 struct elf_segment {
 	uint32_t type, offset, vaddr, paddr, file_size, memory_size, flags, align;
@@ -1129,10 +1185,16 @@ step_firmware(void)
 	uint32_t count, hashes = 0, lowest = ~0u, highest = 0;
 	uint8_t first[4] = { 0 };
 
+	const char *fw_prefix = "adsp";
+
 	announce("find the audio DSP's image in the small image or on the root, and check it against its own header");
 	image_forget();
 	image.segments = 0;
 	header = image_file("adsp.mdt", &size);
+	if (header == NULL) {
+		fw_prefix = "adsp2";
+		header = image_file("adsp2.mdt", &size);
+	}
 	if (header == NULL) {
 		return false;
 	}
@@ -1143,7 +1205,7 @@ step_firmware(void)
 	memcpy(first, header, size < sizeof(first) ? size : sizeof(first));
 	if (size < 5 || memcmp(header, "\177ELF\1", 5) != 0 || count < 3 || count > MAX_SEGMENTS || 52 + 32 * count > size ||
 	    size > PAGE_SIZE) {
-		printf("adsp: %u: fw/adsp.mdt is not such a header (%02x %02x %02x %02x, %u segments, %llu bytes)\n", step, first[0],
+		printf("adsp: %u: fw/%s.mdt is not such a header (%02x %02x %02x %02x, %u segments, %llu bytes)\n", step, fw_prefix, first[0],
 		    first[1], first[2], first[3], count, size);
 		goto fail;
 	}
@@ -1170,7 +1232,7 @@ step_firmware(void)
 		if (segment.file_size != 0) {
 			uint64_t file_size = 0;
 
-			snprintf(name, sizeof(name), "adsp.b%02u", i);
+			snprintf(name, sizeof(name), "%s.b%02u", fw_prefix, i);
 			image.segment[image.segments].file = image_file(name, &file_size);
 			if (image.segment[image.segments].file == NULL) {
 				goto fail;
@@ -3271,6 +3333,14 @@ hakios_adsp_init(void)
 	if (pe_arm_get_soc_base_phys() != HAKIOS_SOC_BASE) {
 		printf("adsp: adsp=1 and adsp_step=N are for the phone's audio DSP, and this is not the phone\n");
 		return;
+	}
+	if (adsp_is_cliffs_soc()) {
+		smem_phys = 0x81d00000UL;
+		cmd_db_phys = 0x81c60000UL;
+		ipcc.phys = 0x00406000u;
+		rsc.phys = 0x17a20000u;
+		adsp_memory = 0x9d400000u;
+		adsp_memory_size = 0x04200000u;
 	}
 	if (last_step == 0) {
 		/* all of it, on a thread of its own, and left up */

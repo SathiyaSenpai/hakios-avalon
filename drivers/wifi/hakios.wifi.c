@@ -178,6 +178,26 @@ extern void ml_io_unmap(vm_offset_t addr, vm_size_t sz);
 extern uint64_t kvtophys(vm_offset_t va);       /* pmap_paddr_t */
 extern void loader_return(void);
 extern kern_return_t thread_terminate(thread_t thread);
+extern int hakios_soc_id(void) __attribute__((weak));
+extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+
+static bool
+wifi_is_cliffs_soc(void)
+{
+	uint32_t soc_smem_arg = 0;
+	char soc_arg[32] = "";
+
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return true;
+	}
+	if (PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000u) {
+		return true;
+	}
+	if (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618)) {
+		return true;
+	}
+	return false;
+}
 
 static LCK_GRP_DECLARE(wifi_lock_group, "hakios-wifi");
 
@@ -447,7 +467,8 @@ put(struct block *b, const char *name, uint32_t offset, uint32_t value)
  * how long. Who is who: we are processor 0; the Wi-Fi DSP is 13 (dt: qcom,remote-pid of
  * qcom,smp2p-wpss). Nothing here writes to this memory.
  */
-#define SMEM_PHYS               0x80900000UL
+static unsigned long smem_phys = 0x80900000UL;
+#define SMEM_PHYS               smem_phys
 #define SMEM_SIZE               0x00200000u
 #define SMEM_US                 0
 #define SMEM_WPSS               13
@@ -889,7 +910,8 @@ step_mailbox(void)
 /* ---- step 3: RPMh -------------------------------------------------------------------------------------- */
 
 /* dt: reserved-memory cmd_db@80860000: the boot loader's list of what RPMh can switch (cmd-db.c; as in hakios.adreno.c) */
-#define CMD_DB_PHYS             0x80860000UL
+static unsigned long cmd_db_phys = 0x80860000UL;
+#define CMD_DB_PHYS             cmd_db_phys
 #define CMD_DB_SIZE             0x20000UL
 
 struct cmd_db_slave {
@@ -1015,38 +1037,46 @@ step_rpmh(void)
 	static const char *const kinds[] = { "at once", "at once", "asleep", "asleep", "asleep", "awake", "awake", "awake" };
 	uint32_t id, config, count, commands;
 
-	announce("look up the supplies involved in the boot loader's list of RPMh resources (memory at 0x80860000)");
+	announce("look up the supplies involved in the boot loader's list of RPMh resources");
 	if (!cmd_db_there()) {
 		printf("wifi: %u: the list is not there\n", step);
 		return false;
 	}
-	show_rpmh_resource("cx.lvl", "the DSP's logic; dt: vdd_cx of qcom,wpss@8a00000, asked 384 while it boots");
+	show_rpmh_resource("cx.lvl", "the DSP's logic; dt: vdd_cx, asked 384 while it boots");
 	show_rpmh_resource("mx.lvl", "its memories; dt: vdd_mx, the same");
 	show_rpmh_resource("xo.lvl", "the crystal oscillator; dt: its clock \"xo\"");
-	show_rpmh_resource("smpb7", "PM7325 S7: the radio's vdd-cx-mx");
-	show_rpmh_resource("smpb1", "PM7325 S1: the radio's vdd-1.8-xo");
-	show_rpmh_resource("smpb8", "PM7325 S8: the radio's vdd-1.3-rfa");
+	if (wifi_is_cliffs_soc()) {
+		show_rpmh_resource("smpb3", "PMR735A S3: the radio's vdd-cx-mx");
+		show_rpmh_resource("smpb1", "PMR735A S1: the radio's vdd-1.8-xo");
+		show_rpmh_resource("smpb2", "PMR735A S2: the radio's vdd-1.3-rfa");
+	} else {
+		show_rpmh_resource("smpb7", "PM7325 S7: the radio's vdd-cx-mx");
+		show_rpmh_resource("smpb1", "PM7325 S1: the radio's vdd-1.8-xo");
+		show_rpmh_resource("smpb8", "PM7325 S8: the radio's vdd-1.3-rfa");
+	}
 
-	announce("read the application processor's RPMh sequencer (0x18220000: the first access to that block): its version, "
-	    "and the commands its slots hold");
+	announce("read the application processor's RPMh sequencer: its version, and the commands its slots hold");
 	id = get(&rsc, "id", RSC_ID);
 	config = get(&rsc, "configuration", RSC_CONFIG);
-	if (((id >> 16) & 0xff) >= 3) {
-		printf("wifi: %u: version %u of the sequencer has its registers elsewhere: not read\n", step, (id >> 16) & 0xff);
-		return true;
-	}
+	uint32_t major = (id >> 16) & 0xff;
+	uint32_t tcs_ctrl = major >= 3 ? 0x24 : TCS_CONTROL;
+	uint32_t tcs_stat = major >= 3 ? 0x28 : TCS_STATUS;
+	uint32_t tcs_en = major >= 3 ? 0x2c : TCS_ENABLED;
+	uint32_t cmd_base = major >= 3 ? 0x34 : 0x30;
+	uint32_t cmd_stride = major >= 3 ? 24 : 20;
 	count = (config >> 12) & 0x3f;
 	commands = (config >> 27) & 0x1f;
-	printf("wifi: %u: the operating system's part has %u TCSs of %u commands\n", step, count, commands);
+	printf("wifi: %u: the operating system's part has %u TCSs of %u commands (RSC v%u)\n", step, count, commands, major);
 	for (uint32_t t = 0; t < count && t < 8; t++) {
-		uint32_t enabled = rd(rsc.base + RSC_TCS(t) + TCS_ENABLED);
+		uint32_t enabled = rd(rsc.base + RSC_TCS(t) + tcs_en);
+		const char *kind = major >= 3 ? (t < 3 ? "wake" : t < 5 ? "active" : "sleep") : kinds[t];
 
-		printf("wifi: %u: TCS %u (%s): commands enabled %#x, control %#x, status %#x\n", step, t, kinds[t], enabled,
-		    rd(rsc.base + RSC_TCS(t) + TCS_CONTROL), rd(rsc.base + RSC_TCS(t) + TCS_STATUS));
+		printf("wifi: %u: TCS %u (%s): commands enabled %#x, control %#x, status %#x\n", step, t, kind, enabled,
+		    rd(rsc.base + RSC_TCS(t) + tcs_ctrl), rd(rsc.base + RSC_TCS(t) + tcs_stat));
 		for (uint32_t c = 0; c < commands && c < 16; c++) {
-			uint32_t flags = rd(rsc.base + RSC_TCS(t) + TCS_COMMAND(c));
-			uint32_t address = rd(rsc.base + RSC_TCS(t) + TCS_COMMAND(c) + 4);
-			uint32_t value = rd(rsc.base + RSC_TCS(t) + TCS_COMMAND(c) + 8);
+			uint32_t flags = rd(rsc.base + RSC_TCS(t) + cmd_base + cmd_stride * c);
+			uint32_t address = rd(rsc.base + RSC_TCS(t) + cmd_base + cmd_stride * c + 4);
+			uint32_t value = rd(rsc.base + RSC_TCS(t) + cmd_base + cmd_stride * c + 8);
 			const struct cmd_db_entry *entry = rpmh_resource(NULL, address);
 
 			if (address == 0 && !(enabled & 1u << c)) {
@@ -1087,6 +1117,7 @@ static struct block arb_observer = { "arbiter's observer", 0x0e600000, 0x10000 }
 #define COMMAND_READ            (1u << 27)      /* "extended register read long"; [11:4] register, [2:0] bytes - 1 */
 
 static uint32_t arb_channels;
+static bool arb_is_v7;
 
 /* The channel of a peripheral (slave << 8 | peripheral), as Linux chooses: the first, unless a later one is ours. -1: none. */
 static int
@@ -1095,7 +1126,7 @@ spmi_channel(uint16_t id)
 	int found = -1;
 
 	for (uint32_t n = 0; n < arb_channels; n++) {
-		uint32_t map = rd(arb_core.base + ARB_CHANNEL(n));
+		uint32_t map = rd(arb_core.base + (arb_is_v7 ? (0x2000 + 4 * n) : ARB_CHANNEL(n)));
 
 		if (map == 0 || ((map >> 8) & 0xfff) != id) {
 			continue;
@@ -1111,7 +1142,8 @@ spmi_channel(uint16_t id)
 static const char *
 spmi_read(int channel, uint8_t reg, uint8_t *bytes, uint32_t count)
 {
-	vm_offset_t at = arb_observer.base + 0x10000UL * ARB_SYSTEM + 0x80UL * (uint32_t)channel;
+	vm_offset_t at = arb_is_v7 ? (arb_observer.base + 0x8000UL * ARB_SYSTEM + 0x20UL * (uint32_t)channel) :
+	    (arb_observer.base + 0x10000UL * ARB_SYSTEM + 0x80UL * (uint32_t)channel);
 	uint64_t start = now_us();
 	uint32_t status, data[2];
 
@@ -1143,12 +1175,7 @@ spmi_read(int channel, uint8_t reg, uint8_t *bytes, uint32_t count)
  * Where the PMICs have their regulators is not in the device tree (on this phone they are
  * RPMh's to switch, and the tree knows them by RPMh's names only), so the arbiter's table is
  * asked which peripherals each PMIC has, and each peripheral what it is (registers 0x04 and
- * 0x05, its type and subtype). Of a regulator's control (qcom_spmi-regulator.c, the kinds
- * "ftsmps426" and "hfs430" that PMICs of this generation continue): 0x08 its status (bit 7: its
- * output is in regulation), 0x40/0x41 the voltage asked for in millivolts, 0x42/0x43 the voltage
- * it makes, 0x45 its mode (the low three bits: 4 retention, 5 low power, 6 automatic, 7 full
- * power), 0x46 bit 7: enabled. Whether a rail that is on was left on by the boot loader for good
- * or is held by somebody's request to RPMh, these registers do not say.
+ * 0x05, its type and subtype).
  */
 #define TYPE_BUCK               0x03            /* a switching regulator's control */
 #define TYPE_FTS                0x1c            /* ... of the fast kind */
@@ -1158,25 +1185,27 @@ static bool
 step_rails(void)
 {
 	uint32_t version;
+	const uint16_t slaves[2] = { 1, wifi_is_cliffs_soc() ? 4 : 2 };
+	const char *const names[2] = { wifi_is_cliffs_soc() ? "PMXR2230" : "PM7325",
+	    wifi_is_cliffs_soc() ? "PMR735A" : "PM8350C" };
 
-	announce("map the PMIC arbiter (0xc440000, 0xc40a000, 0xe600000; the buttons' driver reads through it too) and read "
-	    "its version");
+	announce("map the PMIC arbiter and read its version");
 	version = get(&arb_core, "version", ARB_VERSION);
 	arb_channels = get(&arb_core, "features", ARB_FEATURES) & 0x7ff;
 	need(&arb_cnfg);
 	need(&arb_observer);
-	if (version < ARB_VERSION_5 || version >= ARB_VERSION_7) {
-		printf("wifi: %u: this knows version 5 of the arbiter only: the supplies are not read\n", step);
+	arb_is_v7 = version >= ARB_VERSION_7;
+	if (version < ARB_VERSION_5) {
+		printf("wifi: %u: arbiter version %#x is not supported: the supplies are not read\n", step, version);
 		return true;
 	}
-	if (arb_channels == 0 || arb_channels > 512) {
-		arb_channels = 512;
+	if (arb_channels == 0 || arb_channels > 1024) {
+		arb_channels = 1024;
 	}
 
-	announce("ask every peripheral of the PM7325 (slave 1) and the PM8350C (slave 2) what it is, and the switching "
-	    "regulators among them what they make (the first transfers of ours on the SPMI bus: for each a command word "
-	    "written to the arbiter, nothing to a PMIC)");
-	for (uint16_t slave = 1; slave <= 2; slave++) {
+	announce("ask every peripheral of the radio's PMICs what it is, and the switching regulators among them what they make");
+	for (unsigned si = 0; si < 2; si++) {
+		uint16_t slave = slaves[si];
 		static uint8_t types[256][2];
 		static bool there[256];
 		char line[320];
@@ -1184,7 +1213,7 @@ step_rails(void)
 
 		bzero(there, sizeof(there));
 		for (uint32_t n = 0; n < arb_channels; n++) {
-			uint32_t map = rd(arb_core.base + ARB_CHANNEL(n)), peripheral = (map >> 8) & 0xff;
+			uint32_t map = rd(arb_core.base + (arb_is_v7 ? (0x2000 + 4 * n) : ARB_CHANNEL(n))), peripheral = (map >> 8) & 0xff;
 
 			if (map == 0 || ((map >> 16) & 0xf) != slave || there[peripheral]) {
 				continue;
@@ -1198,7 +1227,7 @@ step_rails(void)
 				    types[peripheral][1]);
 			}
 			if (at > 0 && (at > (int)sizeof(line) - 80 || peripheral == 255)) {
-				printf("wifi: %u: slave %u (%s), peripheral:type/subtype:%s\n", step, slave, slave == 1 ? "PM7325" : "PM8350C",
+				printf("wifi: %u: slave %u (%s), peripheral:type/subtype:%s\n", step, slave, names[si],
 				    line);
 				at = 0;
 			}
@@ -1245,10 +1274,6 @@ step_rails(void)
  * an external abort, which ends the kernel. They are TrustZone's; the device tree gives the
  * loader's node the crystal alone.)
  */
-#define FIRST_PIN               84
-static struct block tlmm = { "tlmm", 0x0f100000 + 0x1000 * FIRST_PIN, 0x3000 };        /* the three pins' registers */
-#define GPIO_CFG(n)             (0x1000 * ((n) - FIRST_PIN))            /* [1:0] pull, [5:2] function, [8:6] drive, [9] output */
-#define GPIO_IO(n)              (0x1000 * ((n) - FIRST_PIN) + 4)        /* bit 0 in, bit 1 out */
 
 static bool
 step_pins(void)
@@ -1256,15 +1281,22 @@ step_pins(void)
 	static const struct {
 		unsigned pin;
 		const char *what;
-	} pins[] = { { 84, "the radio's enable or reset" }, { 85, "Bluetooth's reset" }, { 86, "Bluetooth's sw-ctrl" } };
+	} redwood_pins[] = { { 84, "the radio's enable or reset" }, { 85, "Bluetooth's reset" }, { 86, "Bluetooth's sw-ctrl" } },
+	  cliffs_pins[] = { { 35, "the radio's enable or reset" }, { 156, "Bluetooth's reset" }, { 80, "Bluetooth's sw-ctrl" } };
+	bool cliffs = wifi_is_cliffs_soc();
 
-	announce("read how the firmware left the radio's pins (registers the touch screen's driver uses too)");
-	need(&tlmm);
-	for (unsigned i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
-		uint32_t cfg = rd(tlmm.base + GPIO_CFG(pins[i].pin)), io = rd(tlmm.base + GPIO_IO(pins[i].pin));
+	announce("read how the firmware left the radio's pins");
+	for (unsigned i = 0; i < 3; i++) {
+		unsigned pin = cliffs ? cliffs_pins[i].pin : redwood_pins[i].pin;
+		const char *what = cliffs ? cliffs_pins[i].what : redwood_pins[i].what;
+		vm_offset_t pbase = ml_io_map(0x0f100000 + 0x1000 * pin, 0x1000);
+		if (pbase == 0) {
+			continue;
+		}
+		uint32_t cfg = rd(pbase), io = rd(pbase + 4);
 
-		printf("wifi: %u: gpio%u (%s): configuration %#x: function %u, pull %u, %u mA, %s; reads %u\n", step, pins[i].pin,
-		    pins[i].what, cfg, (cfg >> 2) & 15, cfg & 3, (((cfg >> 6) & 7) + 1) * 2, (cfg & 1u << 9) ? (io & 2 ? "DRIVES HIGH" :
+		printf("wifi: %u: gpio%u (%s): configuration %#x: function %u, pull %u, %u mA, %s; reads %u\n", step, pin,
+		    what, cfg, (cfg >> 2) & 15, cfg & 3, (((cfg >> 6) & 7) + 1) * 2, (cfg & 1u << 9) ? (io & 2 ? "DRIVES HIGH" :
 		    "DRIVES LOW") : "an input", io & 1);
 	}
 	return true;
@@ -1273,7 +1305,8 @@ step_pins(void)
 /* ---- step 6: the firmware ------------------------------------------------------------------------------ */
 
 #define PAS_WPSS                6               /* dt: qcom,pas-id of qcom,wpss@8a00000 */
-#define WPSS_MEMORY             0x9ae00000u     /* dt: reserved-memory wlan@9ae00000, that node's memory-region */
+static uint32_t wpss_memory = 0x9ae00000u;      /* dt: reserved-memory wpss/wlan region */
+#define WPSS_MEMORY             wpss_memory
 #define WPSS_MEMORY_SIZE        0x01900000u
 
 extern dev_t mdevlookup(int devid);
@@ -3592,7 +3625,8 @@ static struct block apps_smmu = { "apps smmu", 0x15000000, 0x2000 };
 #define SMMU_IDR1               0x024           /* bit 31: 64K pages, [30:28] log2(pages)-1, [7:0] translation contexts */
 #define SMMU_SMR(n)             (0x800 + 4 * (n))       /* bit 31 valid, [30:16] mask, [14:0] stream */
 #define SMMU_S2CR(n)            (0xc00 + 4 * (n))       /* [17:16] 0 translate 1 bypass 2 fault, [7:0] context */
-#define RADIO_STREAM            0x1c00
+static uint32_t radio_stream = 0x1c00u;
+#define RADIO_STREAM            radio_stream
 #define RADIO_STREAM_MASK       0x0001
 
 static void
@@ -3656,7 +3690,8 @@ smmu_look(void)
  * everything read back as written (but two bits that the SMMU does not keep), and the radio
  * then read and wrote the memory it was shown without a fault.
  */
-#define RADIO_ADDRESSES         0xa0000000ull
+static uint64_t radio_addresses = 0xa0000000ull;
+#define RADIO_ADDRESSES         radio_addresses
 #define RADIO_ADDRESSES_SIZE    0x10000000u
 #define RADIO_TABLES            32              /* of 4K: the root, one of the second level, and 2 MB of addresses each other */
 #define RADIO_PTE               (3ull | 1ull << 6 | 2ull << 8 | 1ull << 10 | 1ull << 11) /* a page; for requests of either
@@ -3670,7 +3705,8 @@ smmu_look(void)
  * tree's node for it, a register of the GIC that raises the SPI whose number is written; the
  * node's interrupts are SPI 768..799, so vector v is the GIC's number 800 + v.
  */
-#define RADIO_MSI_REGISTER      0x17a10040ull
+static uint64_t radio_msi_register = 0x17a10040ull;
+#define RADIO_MSI_REGISTER      radio_msi_register
 #define RADIO_FIRST_SPI         768u
 #define PTE_ADDRESS             0x0000fffffffff000ull
 #define SMMU_SGFSR              0x048           /* what the SMMU as a whole has refused ... */
@@ -4036,14 +4072,16 @@ hakios_wifi_dsp_is_up(void)
 const uint8_t *
 hakios_wifi_driver_file(const char *name, uint64_t *size)
 {
-	static const char *const files[][2] = { { "board.bin", "bd_m20gl.elf" }, { "regdb.bin", "regdb_xiaomi.bin" } };
 	const char *last = strrchr(name, '/');
 
 	last = last == NULL ? name : last + 1;
-	for (unsigned i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
-		if (strcmp(last, files[i][0]) == 0) {
-			return image_file(files[i][1], size);
-		}
+	if (strcmp(last, "board.bin") == 0) {
+		const uint8_t *d = hakios_image_file("fw", "bdwlan.elf", size, NULL);
+		return d != NULL ? d : image_file("bd_m20gl.elf", size);
+	}
+	if (strcmp(last, "regdb.bin") == 0) {
+		const uint8_t *d = hakios_image_file("fw", "regdb.bin", size, NULL);
+		return d != NULL ? d : image_file("regdb_xiaomi.bin", size);
 	}
 	return NULL;
 }
@@ -4316,6 +4354,22 @@ hakios_wifi_init(void)
 	uint32_t on = 0, back = 0, done = 0;
 	uint64_t size = 0;
 	thread_t thread;
+
+	if (wifi_is_cliffs_soc()) {
+		smem_phys = 0x81d00000UL;
+		cmd_db_phys = 0x81c60000UL;
+		ipcc.phys = 0x00406000u;
+		rsc.phys = 0x17a20000u;
+		arb_core.phys = 0x0c400000u;
+		arb_core.size = 0x3000u;
+		arb_cnfg.phys = 0x0c42d000u;
+		arb_observer.phys = 0x0c440000u;
+		arb_observer.size = 0x8000u;
+		wpss_memory = 0x9bb00000u;
+		radio_stream = 0x1400u;
+		radio_addresses = 0xb0000000ull;
+		radio_msi_register = 0x17110040ull;
+	}
 
 	PE_parse_boot_argn("wifi_step", &last_step, sizeof(last_step));
 	if (last_step == 0 && (!PE_parse_boot_argn("wifi", &on, sizeof(on)) || on == 0)) {

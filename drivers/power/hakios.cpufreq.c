@@ -12,6 +12,7 @@
  * Register layout: Linux drivers/cpufreq/qcom-cpufreq-hw.c ("epss" variant).
  */
 #include <kern/clock.h>
+#include <kern/locks.h>
 #include <kern/thread.h>
 #include <os/atomic_private.h>
 #include <libkern/libkern.h>
@@ -27,7 +28,8 @@ extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
 extern void loader_log_putc(char c);
 extern void hakios_tl(const char *format, ...) __printflike(1, 2);
 extern bool ml_cpu_idle_time(int cpu_id, uint64_t *idle);
-
+extern int hakios_soc_id(void) __attribute__((weak));
+extern lck_mtx_t hakios_rsc_lock;
 /*
  * The loader's log as well: this runs early, and the kernel's own log of a run keeps only its end. With
  * interrupts off -- on the way back to the loader (hakios_ddr_quiesce()) -- the loader's log only: the
@@ -55,13 +57,39 @@ tell(const char *format, ...)
 }
 
 #define EPSS_PHYS               0x18591000UL    /* three groups ("domains") of 0x1000: small cores, big, biggest */
+#define EPSS_PHYS_CLIFFS        0x17d91000UL    /* SM7675 / Cliffs EPSS frequency domains */
 #define EPSS_DOMAIN_SIZE        0x1000UL
 #define EPSS_DOMAINS            3
 #define EPSS_FREQ_TABLE         0x100           /* a word per row: [31:30] clock source, [7:0] multiple of 19.2 MHz */
 #define EPSS_TABLE_ROWS         40
-#define EPSS_PERF_STATE         0x320           /* the row that is wanted */
+#define EPSS_PERF_STATE         0x320           /* PERF_STATE_DESIRED (verified in qcom-cpufreq-hw-debug.ko) */
+#define EPSS_PSTATE_STATUS      0x3c4           /* PSTATE_STATUS on EPSS v2 */
 #define XO_KHZ                  19200
 #define ALTERNATE_KHZ           300000          /* source 0: a fixed 300 MHz */
+
+static vm_offset_t domain_base[EPSS_DOMAINS];
+static uint32_t domain_khz[EPSS_DOMAINS][EPSS_TABLE_ROWS];
+static uint32_t domain_rows[EPSS_DOMAINS];
+static uint32_t domain_cores[EPSS_DOMAINS];
+static uint32_t domain_cur_row[EPSS_DOMAINS];
+static bool cpufreq_ready;
+static bool cpufreq_turbo;
+static uint32_t cpufreq_user_max_khz;
+static int thermal_tier;
+static LCK_GRP_DECLARE(cpufreq_lock_grp, "hakios-cpufreq");
+static LCK_MTX_DECLARE(cpufreq_lock, &cpufreq_lock_grp);
+static inline bool
+is_cliffs_soc(void)
+{
+	uint32_t soc_smem_arg = 0;
+	uint32_t cf_cliffs = 0;
+	if ((PE_parse_boot_argn("soc_smem", &soc_smem_arg, sizeof(soc_smem_arg)) && soc_smem_arg == 0x81d00000) ||
+	    (PE_parse_boot_argn("cpufreq_cliffs", &cf_cliffs, sizeof(cf_cliffs)) && cf_cliffs) ||
+	    (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618))) {
+		return true;
+	}
+	return false;
+}
 
 /* How fast a simple loop runs, in thousands of iterations per millisecond. */
 static uint32_t
@@ -83,16 +111,72 @@ domain_of(uint32_t phys_id)
 {
 	uint32_t core = (phys_id >> 8) & 0xff;
 
+	if (is_cliffs_soc()) {
+		/* Cliffs SM7675: 3 Silver (0..2), 4 Gold (3..6), 1 Prime (7) */
+		return core < 3 ? 0 : core < 7 ? 1 : 2;
+	}
 	return core < 4 ? 0 : core < 7 ? 1 : 2;
+}
+
+static uint32_t
+pick_row_for_khz(uint32_t domain, uint32_t max_khz)
+{
+	uint32_t n = domain_rows[domain];
+	uint32_t best = 0;
+
+	if (n == 0) {
+		return 0;
+	}
+	if (max_khz == 0) {
+		return n - 1;
+	}
+	for (uint32_t r = 0; r < n; r++) {
+		if (domain_khz[domain][r] <= max_khz) {
+			best = r;
+		} else {
+			break;
+		}
+	}
+	return best;
+}
+
+static uint32_t
+cliffs_cap_khz(uint32_t domain, int tier)
+{
+	/*
+	 * Tier 0 (normal, < 72 C): A520 at max, A720 capped at 2000 MHz, X4 at 2200 MHz
+	 * unless cpufreq_turbo=1 or cpufreq_max_mhz= overrides. Stepping down at higher
+	 * temperatures avoids runaway heating under sustained software rendering.
+	 */
+	static const uint32_t caps[4][EPSS_DOMAINS] = {
+		{ 0,       2000000, 2200000 },
+		{ 0,       1600000, 1750000 },
+		{ 1400000, 1200000, 1200000 },
+		{ 1000000, 1000000, 1000000 },
+	};
+	int t = tier < 0 ? 0 : tier > 3 ? 3 : tier;
+	uint32_t cap = (t == 0 && cpufreq_turbo) ? 0 : caps[t][domain];
+
+	if (cpufreq_user_max_khz != 0 && (cap == 0 || cpufreq_user_max_khz < cap)) {
+		cap = cpufreq_user_max_khz;
+	}
+	return cap;
 }
 
 static void
 raise_domain(uint32_t domain, uint32_t cores)
 {
-	uint32_t top = 0, top_khz = 0, was;
+	uint32_t top_khz = 0, was, target, pstate = 0;
+	vm_offset_t epss_base = is_cliffs_soc() ? EPSS_PHYS_CLIFFS : EPSS_PHYS;
 	vm_offset_t base;
 
-	base = ml_io_map(EPSS_PHYS + domain * EPSS_DOMAIN_SIZE, EPSS_DOMAIN_SIZE);
+	base = ml_io_map(epss_base + domain * EPSS_DOMAIN_SIZE, EPSS_DOMAIN_SIZE);
+	if (base == 0) {
+		return;
+	}
+	domain_base[domain] = base;
+	domain_cores[domain] = cores;
+	domain_rows[domain] = 0;
 	for (uint32_t row = 0; row < EPSS_TABLE_ROWS; row++) {
 		uint32_t entry = *(volatile uint32_t *)(base + EPSS_FREQ_TABLE + 4 * row);
 		uint32_t khz = (entry >> 30) ? XO_KHZ * (entry & 0xff) : ALTERNATE_KHZ;
@@ -100,14 +184,74 @@ raise_domain(uint32_t domain, uint32_t cores)
 		if (row > 0 && khz <= top_khz) {
 			break;                  /* the table ends by repeating its last row */
 		}
-		top = row;
+		domain_khz[domain][row] = khz;
+		domain_rows[domain] = row + 1;
 		top_khz = khz;
 	}
+	if (domain_rows[domain] == 0) {
+		return;
+	}
+	target = is_cliffs_soc() ? pick_row_for_khz(domain, cliffs_cap_khz(domain, 0)) : domain_rows[domain] - 1;
 	was = *(volatile uint32_t *)(base + EPSS_PERF_STATE);
-	*(volatile uint32_t *)(base + EPSS_PERF_STATE) = top;
+	*(volatile uint32_t *)(base + EPSS_PERF_STATE) = target;
 	delay_for_interval(20, NSEC_PER_MSEC);
-	tell("cpufreq: group %u (%u of our cores): row %u -> %u of the frequency table, %u MHz\n", domain, cores, was, top,
-	    top_khz / 1000);
+	domain_cur_row[domain] = target;
+	if (is_cliffs_soc()) {
+		pstate = *(volatile uint32_t *)(base + EPSS_PSTATE_STATUS);
+		tell("cpufreq: group %u (%u of our cores): row %u -> %u (%u MHz, top %u MHz, status %#x)\n",
+		    domain, cores, was, target, domain_khz[domain][target] / 1000, top_khz / 1000, pstate);
+	} else {
+		tell("cpufreq: group %u (%u of our cores): row %u -> %u of the frequency table, %u MHz\n",
+		    domain, cores, was, target, domain_khz[domain][target] / 1000);
+	}
+}
+
+void hakios_cpufreq_thermal_step(int max_mc);
+
+void
+hakios_cpufreq_thermal_step(int max_mc)
+{
+	int next;
+
+	if (!cpufreq_ready || !is_cliffs_soc() || max_mc <= -200000) {
+		return;
+	}
+	lck_mtx_lock(&cpufreq_lock);
+	next = thermal_tier;
+	if (max_mc >= 90000) {
+		next = 3;
+	} else if (max_mc >= 82000) {
+		next = next > 2 && max_mc < 86000 ? 3 : 2;
+	} else if (max_mc >= 72000) {
+		next = next > 1 && max_mc < 77000 ? 2 : 1;
+	} else {
+		if (thermal_tier == 1 && max_mc >= 67000) {
+			next = 1;
+		} else if (thermal_tier >= 2 && max_mc >= 77000) {
+			next = 2;
+		} else {
+			next = 0;
+		}
+	}
+	if (next != thermal_tier) {
+		static const char *const names[4] = { "normal", "warm", "hot", "critical" };
+		thermal_tier = next;
+		tell("cpufreq: thermal %d.%d C -> %s (tier %d): scaling groups",
+		    max_mc / 1000, max_mc >= 0 ? (max_mc % 1000) / 100 : 0, names[next], next);
+		for (uint32_t d = 0; d < EPSS_DOMAINS; d++) {
+			if (domain_cores[d] == 0 || domain_base[d] == 0 || domain_rows[d] == 0) {
+				continue;
+			}
+			uint32_t target = pick_row_for_khz(d, cliffs_cap_khz(d, next));
+			if (target != domain_cur_row[d]) {
+				*(volatile uint32_t *)(domain_base[d] + EPSS_PERF_STATE) = target;
+				domain_cur_row[d] = target;
+			}
+			tell(" g%u=%uMHz", d, domain_khz[d][domain_cur_row[d]] / 1000);
+		}
+		tell("\n");
+	}
+	lck_mtx_unlock(&cpufreq_lock);
 }
 
 /*
@@ -307,6 +451,7 @@ load_start(void)
  * together get no more from memory than one alone: 12 GB/s; nobody here votes for more.)
  */
 #define CMD_DB_PHYS             0x80860000UL
+#define CMD_DB_PHYS_CLIFFS      0x81c60000UL
 #define CMD_DB_SIZE             0x20000UL
 #define CMD_DB_BCM              5               /* the kind of resource in a slave's id: bus clock managers */
 
@@ -345,7 +490,8 @@ static void
 ddr_look(void)
 {
 	/* (memory, not registers: mapped so that reads of any size and alignment are allowed) */
-	const struct cmd_db_header *db = (const struct cmd_db_header *)ml_io_map_wcomb(CMD_DB_PHYS, CMD_DB_SIZE);
+	vm_offset_t cmd_db_base = is_cliffs_soc() ? CMD_DB_PHYS_CLIFFS : CMD_DB_PHYS;
+	const struct cmd_db_header *db = (const struct cmd_db_header *)ml_io_map_wcomb(cmd_db_base, CMD_DB_SIZE);
 
 	if (db->magic[0] != 0xdb || db->magic[1] != 0x30 || db->magic[2] != 0x03 || db->magic[3] != 0x0c) {
 		tell("ddr: no command database\n");
@@ -381,34 +527,47 @@ ddr_look(void)
  * above -- the bandwidth it asked for, and that is in force whenever the processors are awake.
  */
 #define RSC_PHYS                0x18220000UL
+#define RSC_PHYS_CLIFFS         0x17a20000UL
 #define RSC_SIZE                0x10000UL
-#define RSC_TCS(n, reg)         (0xd00 + 0x2a0 * (n) + (reg))
+#define RSC_TCS_OFFSET          0xd00
+#define RSC_TCS_STRIDE          0x2a0
+#define RSC_TCS(n, reg)         (RSC_TCS_OFFSET + RSC_TCS_STRIDE * (n) + (reg))
 #define RSC_TCS_COUNT           9
 #define RSC_CMDS                16
 
 static void
 ddr_slots(void)
 {
-	vm_offset_t rsc = ml_io_map(RSC_PHYS, RSC_SIZE);
+	vm_offset_t rsc_base = is_cliffs_soc() ? RSC_PHYS_CLIFFS : RSC_PHYS;
+	vm_offset_t rsc = ml_io_map(rsc_base, RSC_SIZE);
+	uint32_t major = (*(volatile uint32_t *)rsc >> 16) & 0xff;
+	bool v3 = major >= 3;
+	uint32_t reg_enable = v3 ? 0x2c : 0x1c;
+	uint32_t cmd_stride = v3 ? 24 : 20;
+	uint32_t cmd_msgid  = v3 ? 0x34 : 0x30;
+	uint32_t cmd_addr   = v3 ? 0x38 : 0x34;
+	uint32_t cmd_data   = v3 ? 0x3c : 0x38;
 
 	for (unsigned t = 0; t < RSC_TCS_COUNT; t++) {
-		uint32_t enabled = *(volatile uint32_t *)(rsc + RSC_TCS(t, 0x1c));
+		uint32_t enabled = *(volatile uint32_t *)(rsc + RSC_TCS(t, reg_enable));
+		const char *kind = v3
+		    ? (t < 3 ? "wake" : t < 5 ? "active" : t < 7 ? "sleep" : "generic")
+		    : (t < 2 ? "active" : t < 5 ? "sleep" : t < 8 ? "wake" : "control");
 
 		for (unsigned c = 0; c < RSC_CMDS; c++) {
-			uint32_t msgid = *(volatile uint32_t *)(rsc + RSC_TCS(t, 0x30 + 20 * c));
-			uint32_t address = *(volatile uint32_t *)(rsc + RSC_TCS(t, 0x34 + 20 * c));
-			uint32_t data = *(volatile uint32_t *)(rsc + RSC_TCS(t, 0x38 + 20 * c));
+			uint32_t msgid = *(volatile uint32_t *)(rsc + RSC_TCS(t, cmd_msgid + cmd_stride * c));
+			uint32_t address = *(volatile uint32_t *)(rsc + RSC_TCS(t, cmd_addr + cmd_stride * c));
+			uint32_t data = *(volatile uint32_t *)(rsc + RSC_TCS(t, cmd_data + cmd_stride * c));
 
 			if (address == 0 && data == 0) {
 				continue;
 			}
 			tell("ddr: slot set %u (%s) command %u%s: message %#x, address %#x, data %#x%s\n", t,
-			    t < 2 ? "active" : t < 5 ? "sleep" : t < 8 ? "wake" : "control", c, enabled & (1u << c) ? " (on)" : "",
+			    kind, c, enabled & (1u << c) ? " (on)" : "",
 			    msgid, address, data, (address >> 16 & 0xf) == CMD_DB_BCM ? " <- a BCM" : "");
 		}
 	}
 }
-
 /*
  * The memory's bandwidth (on by default; boot-arg ddr=0: not): a vote through RPMh -- the most there
  * is -- on the bus clock managers of the memory controller (MC0: the memory's clock) and of the
@@ -429,7 +588,8 @@ ddr_slots(void)
 #define BCM_COMMIT              (1u << 30)
 #define BCM_VALID               (1u << 29)
 #define BCM_VOTE(x, y)          (BCM_COMMIT | BCM_VALID | ((uint32_t)(x) & 0x3fff) << 14 | ((uint32_t)(y) & 0x3fff))
-#define TCS_REG(reg)            (ddr_rsc + 0xd00 + (reg))       /* command slot set 0, an "active" one */
+#define TCS_IRQ(reg)            (ddr_rsc + RSC_TCS_OFFSET + (reg))
+#define TCS_REG(reg)            (ddr_rsc + RSC_TCS_OFFSET + RSC_TCS_STRIDE * ddr_tcs_id + (reg))
 #define BCM_ACV_APPS            8
 #define DDR_REST                1024            /* the vote left for the loader (ddr_rest=N); see hakios_ddr_quiesce() */
 
@@ -440,7 +600,8 @@ static bool ddr_voted;
 static uint32_t
 cmd_db_address(const char *name)
 {
-	const struct cmd_db_header *db = (const struct cmd_db_header *)ml_io_map_wcomb(CMD_DB_PHYS, CMD_DB_SIZE);
+	vm_offset_t cmd_db_base = is_cliffs_soc() ? CMD_DB_PHYS_CLIFFS : CMD_DB_PHYS;
+	const struct cmd_db_header *db = (const struct cmd_db_header *)ml_io_map_wcomb(cmd_db_base, CMD_DB_SIZE);
 	char id[8] = { 0 };
 
 	if (db->magic[0] != 0xdb || db->magic[1] != 0x30 || db->magic[2] != 0x03 || db->magic[3] != 0x0c) {
@@ -463,51 +624,76 @@ cmd_db_address(const char *name)
 	return 0;
 }
 
-/* Up to three writes through command slot set 0, and the wait until RPMh has done them (as drivers/input/hakios.goodix.c) */
+/* Up to three writes through an ACTIVE command slot set, and the wait until RPMh has done them */
 static bool
 ddr_rpmh_write(const uint32_t *address, const uint32_t *data, unsigned count)
 {
-	uint32_t irq_enable = *(volatile uint32_t *)TCS_REG(0x00);
+	uint32_t major = (*(volatile uint32_t *)ddr_rsc >> 16) & 0xff;
+	bool v3 = major >= 3;
+	uint32_t ddr_tcs_id = v3 ? 3 : 0;       /* Cliffs qcom,tcs-config: WAKE 0..2, ACTIVE 3..4 */
+	uint32_t tcs_bit = 1u << ddr_tcs_id;
+	uint32_t reg_wait    = v3 ? 0x20 : 0x10;
+	uint32_t reg_control = v3 ? 0x24 : 0x14;
+	uint32_t reg_status  = v3 ? 0x28 : 0x18;
+	uint32_t reg_enable  = v3 ? 0x2c : 0x1c;
+	uint32_t cmd_stride  = v3 ? 24 : 20;
+	uint32_t cmd_msgid   = v3 ? 0x34 : 0x30;
+	uint32_t cmd_addr    = v3 ? 0x38 : 0x34;
+	uint32_t cmd_data    = v3 ? 0x3c : 0x38;
+	bool lock = ml_get_interrupts_enabled();
+	uint32_t irq_enable;
 	bool done = false;
 
-	for (int i = 0; *(volatile uint32_t *)TCS_REG(0x18) == 0; i++) {
+	if (lock) {
+		lck_mtx_lock(&hakios_rsc_lock);
+	}
+	irq_enable = *(volatile uint32_t *)TCS_IRQ(0x00);
+	for (int i = 0; *(volatile uint32_t *)TCS_REG(reg_status) == 0; i++) {
 		if (i > 2000) {
 			tell("ddr: RPMh: the command slots stay busy\n");
+			if (lock) lck_mtx_unlock(&hakios_rsc_lock);
 			return false;
 		}
 		delay_for_interval(100, NSEC_PER_USEC);
 	}
-	*(volatile uint32_t *)TCS_REG(0x14) &= ~(1u << 24);
-	*(volatile uint32_t *)TCS_REG(0x14) &= ~(1u << 16);
-	*(volatile uint32_t *)TCS_REG(0x08) = 1;
+	*(volatile uint32_t *)TCS_REG(reg_control) &= ~(1u << 24);
+	(void)*(volatile uint32_t *)TCS_REG(reg_control);
+	*(volatile uint32_t *)TCS_REG(reg_control) &= ~(1u << 16);
+	(void)*(volatile uint32_t *)TCS_REG(reg_control);
+	*(volatile uint32_t *)TCS_IRQ(0x08) = tcs_bit;
 	for (unsigned i = 0; i < count; i++) {
-		*(volatile uint32_t *)TCS_REG(0x30 + 20 * i) = 0x10008 | 0x100;        /* a 4-byte write, with a response */
-		*(volatile uint32_t *)TCS_REG(0x34 + 20 * i) = address[i];
-		*(volatile uint32_t *)TCS_REG(0x38 + 20 * i) = data[i];
+		*(volatile uint32_t *)TCS_REG(cmd_msgid + cmd_stride * i) = 0x10008 | 0x100;
+		*(volatile uint32_t *)TCS_REG(cmd_addr  + cmd_stride * i) = address[i];
+		*(volatile uint32_t *)TCS_REG(cmd_data  + cmd_stride * i) = data[i];
 	}
-	*(volatile uint32_t *)TCS_REG(0x10) = (1u << count) - 1;
-	*(volatile uint32_t *)TCS_REG(0x1c) = (1u << count) - 1;
-	*(volatile uint32_t *)TCS_REG(0x00) = irq_enable | 1;
-	*(volatile uint32_t *)TCS_REG(0x14) = 1u << 16;
-	*(volatile uint32_t *)TCS_REG(0x14) = 1u << 16 | 1u << 24;
+	*(volatile uint32_t *)TCS_REG(reg_wait) = (1u << count) - 1;
+	*(volatile uint32_t *)TCS_REG(reg_enable) = (1u << count) - 1;
+	*(volatile uint32_t *)TCS_IRQ(0x00) = irq_enable | tcs_bit;
+	*(volatile uint32_t *)TCS_REG(reg_control) = 1u << 16;
+	(void)*(volatile uint32_t *)TCS_REG(reg_control);
+	*(volatile uint32_t *)TCS_REG(reg_control) = (1u << 16) | (1u << 24);
 	for (int i = 0; i < 2000 && !done; i++) {
-		done = (*(volatile uint32_t *)TCS_REG(0x04) & 1) != 0;
+		done = (*(volatile uint32_t *)TCS_IRQ(0x04) & tcs_bit) != 0;
 		if (!done) {
 			delay_for_interval(100, NSEC_PER_USEC);
 		}
 	}
-	*(volatile uint32_t *)TCS_REG(0x14) &= ~(1u << 24);
-	*(volatile uint32_t *)TCS_REG(0x14) &= ~(1u << 16);
-	*(volatile uint32_t *)TCS_REG(0x1c) = 0;
-	*(volatile uint32_t *)TCS_REG(0x10) = 0;
-	*(volatile uint32_t *)TCS_REG(0x08) = 1;
-	*(volatile uint32_t *)TCS_REG(0x00) = irq_enable;
+	*(volatile uint32_t *)TCS_REG(reg_control) &= ~(1u << 24);
+	(void)*(volatile uint32_t *)TCS_REG(reg_control);
+	*(volatile uint32_t *)TCS_REG(reg_control) &= ~(1u << 16);
+	(void)*(volatile uint32_t *)TCS_REG(reg_control);
+	*(volatile uint32_t *)TCS_REG(reg_enable) = 0;
+	*(volatile uint32_t *)TCS_REG(reg_wait) = 0;
+	*(volatile uint32_t *)TCS_IRQ(0x08) = tcs_bit;
+	*(volatile uint32_t *)TCS_IRQ(0x00) = irq_enable;
+	if (lock) {
+		lck_mtx_unlock(&hakios_rsc_lock);
+	}
 	if (!done) {
 		tell("ddr: RPMh: no answer to the vote\n");
 	}
 	return done;
 }
-
 static bool
 ddr_vote(uint32_t vote)
 {
@@ -530,7 +716,8 @@ ddr_raise(void)
 		tell("ddr: no vote (MC0 %#x, SH0 %#x, ACV %#x, vote %u)\n", ddr_mc0, ddr_sh0, ddr_acv, vote);
 		return;
 	}
-	ddr_rsc = ml_io_map(RSC_PHYS, RSC_SIZE);
+	vm_offset_t rsc_base = is_cliffs_soc() ? RSC_PHYS_CLIFFS : RSC_PHYS;
+	ddr_rsc = ml_io_map(rsc_base, RSC_SIZE);
 	ddr_voted = ddr_vote(vote);
 	tell("ddr: memory bandwidth vote %u on MC0 (%#x) and SH0 (%#x)%s\n", vote, ddr_mc0, ddr_sh0, ddr_voted ? "" : ": FAILED");
 }
@@ -560,7 +747,7 @@ void
 hakios_cpufreq_init(void)
 {
 	const ml_topology_info_t *topology = ml_get_topology_info();
-	uint32_t enabled = 0, membench = 0, cores[EPSS_DOMAINS] = { 0 }, before, here;
+	uint32_t enabled = 0, membench = 0, turbo = 0, max_mhz = 0, cores[EPSS_DOMAINS] = { 0 }, before, here;
 
 	load_start();
 	enabled = 2;
@@ -569,11 +756,31 @@ hakios_cpufreq_init(void)
 		ddr_look();
 		ddr_slots();
 	} else if (enabled == 2 && cpufreq_wanted()) {
-		ddr_raise();
+		if (is_cliffs_soc()) {
+			uint32_t cf_cliffs = 1;
+			if (!PE_parse_boot_argn("cpufreq_cliffs", &cf_cliffs, sizeof(cf_cliffs)) || cf_cliffs != 0) {
+				ddr_raise();
+			}
+		} else {
+			ddr_raise();
+		}
 	}
 	enabled = 0;
 	if (!PE_parse_boot_argn("cpufreq", &enabled, sizeof(enabled)) || !enabled) {
 		return;
+	}
+	if (is_cliffs_soc()) {
+		uint32_t cf_cliffs = 1;
+		if (PE_parse_boot_argn("cpufreq_cliffs", &cf_cliffs, sizeof(cf_cliffs)) && !cf_cliffs) {
+			tell("cpufreq: cliffs cpufreq disabled (cpufreq_cliffs=0)\n");
+			return;
+		}
+	}
+	if (PE_parse_boot_argn("cpufreq_turbo", &turbo, sizeof(turbo)) && turbo != 0) {
+		cpufreq_turbo = true;
+	}
+	if (PE_parse_boot_argn("cpufreq_max_mhz", &max_mhz, sizeof(max_mhz)) && max_mhz >= 300 && max_mhz <= 4000) {
+		cpufreq_user_max_khz = max_mhz * 1000u;
 	}
 	for (unsigned int i = 0; i < topology->num_cpus; i++) {
 		cores[domain_of(topology->cpus[i].phys_id)]++;
@@ -586,6 +793,7 @@ hakios_cpufreq_init(void)
 			raise_domain(domain, cores[domain]);
 		}
 	}
+	cpufreq_ready = true;
 	printf("cpufreq: on core %u a loop ran at %u, now at %u\n", here, before, loop_speed());
 	/* membench has its own variable: when the boot-arg is absent, the cpufreq value (2 means on) must not start the benchmark */
 	PE_parse_boot_argn("membench", &membench, sizeof(membench));
