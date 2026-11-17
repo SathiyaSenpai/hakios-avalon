@@ -75,10 +75,12 @@ out/host/ir3-kernel: tools/ir3-kernel.cc include/hakios-metal/kernel.hpp tools/k
 	@mkdir -p $(dir $@)
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -O1 -g -Iinclude $(MESA_DEFS) $(MESA_INC) -o $@ tools/ir3-kernel.cc $(MESA_LIBS)
 
+ifneq ($(wildcard $(MESA_BUILD)/build.ninja),)
 tests/fixtures/%.hpp: tools/kernels/%.asm out/host/ir3-kernel
 	out/host/ir3-kernel --chip-id $(CHIP_ID) -o $@ $<
 
 fixtures: $(KERNEL_FIXTURES)
+endif
 
 # The AIR path. A Metal kernel written as LLVM IR (tools/kernels/*.ll) goes
 # through llvm-as, then through Mesa's ir3_compiler with the AIR front end --
@@ -101,6 +103,11 @@ KERNEL_LL        = $(wildcard tools/kernels/*.ll)
 KERNEL_BC        = $(patsubst tools/kernels/%.ll,out/host/kernels/%.bc,$(KERNEL_LL))
 KERNEL_AIR_FIXTURES = $(patsubst tools/kernels/%.ll,tests/fixtures/%_air.hpp,$(KERNEL_LL))
 
+out/host/kernels/%.bc: tools/kernels/%.ll
+	@mkdir -p $(dir $@)
+	$(LLVM_AS) -o $@ $<
+
+ifneq ($(wildcard $(MESA_BUILD)/build.ninja),)
 out/host/ir3-dump/ir3_cmdline.c: tools/mesa/ir3-dump.patch $(IR3_CMDLINE_C)
 	@mkdir -p $(dir $@)
 	patch -s -o $@ $(IR3_CMDLINE_C) tools/mesa/ir3-dump.patch
@@ -116,11 +123,7 @@ out/host/ir3_compiler: out/host/ir3-dump/ir3_cmdline.c tools/kernels.mk
 # keep the .bc: make would otherwise delete it as an intermediate and re-run llvm-as each time
 .SECONDARY:
 
-out/host/kernels/%.bc: tools/kernels/%.ll
-	@mkdir -p $(dir $@)
-	$(LLVM_AS) -o $@ $<
-
 tests/fixtures/%_air.hpp: out/host/kernels/%.bc tools/kernels/%.ll $(IR3_COMPILER)
 	$(IR3_COMPILER) --chip-id $(CHIP_ID) -o $@ -s tools/kernels/$*.ll -n $*_air $< > out/host/kernels/$*.listing
-
 air-fixtures: $(KERNEL_AIR_FIXTURES)
+endif

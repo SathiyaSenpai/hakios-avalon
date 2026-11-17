@@ -162,9 +162,10 @@ void CommandQueue::giveBuffer(std::shared_ptr<Buffer> b) {
     // (only one no one else holds, of a size takeBuffer makes: a piece's buffer kept elsewhere is still someone's)
     if (b == nullptr || b.use_count() != 1 || b->contents() == nullptr || b->length() != sizeClass(b->length())) return;
     std::lock_guard<std::mutex> g(poolLock_);
-    if (freeBytes_ + b->length() > (32ull << 20)) return;
+    auto& pool = freeBuffers_[b->length()];
+    if (pool.size() >= 8 || freeBytes_ + b->length() > (4ull << 20)) return;
     freeBytes_ += b->length();
-    freeBuffers_[b->length()].push_back(std::move(b));
+    pool.push_back(std::move(b));
 }
 
 std::shared_ptr<Buffer> CommandQueue::takeSlab(uint64_t bytes, std::string* why) { return takeBuffer(bytes, why); }
@@ -626,7 +627,7 @@ void CommandQueue::submit(std::shared_ptr<CommandBuffer> cb) {
     int e = gpu_.submit(id_, *cb->commands_, 0, uint32_t(w.size()), cb->uses_, &cb->fence_);
     if (e != 0) {
         cb->error_ = std::string("the driver refused the submission: ") + strerror(e);
-        idle_.push_back(std::move(cb->commands_));
+        if (idle_.size() < 8) idle_.push_back(std::move(cb->commands_));
         g.unlock();                         // (the handlers may commit more: not under the queue's lock)
         cb->finish(CommandBuffer::kError);
         return;
@@ -667,7 +668,7 @@ void CommandQueue::waiter() {
         cb->finish(e == 0 ? CommandBuffer::kCompleted : CommandBuffer::kError);
         g.lock();
         inFlight_.pop_front();
-        if (cb->commands_ != nullptr) {
+        if (cb->commands_ != nullptr && idle_.size() < 8) {
             idle_.push_back(std::move(cb->commands_));
         }
     }

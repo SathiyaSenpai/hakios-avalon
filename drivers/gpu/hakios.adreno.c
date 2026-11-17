@@ -105,6 +105,27 @@ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
 extern uint64_t kvtophys(vm_offset_t va);       /* pmap_paddr_t */
 
+extern int hakios_soc_id(void) __attribute__((weak));
+extern boolean_t PE_parse_boot_arg_str(const char *arg_string, char *arg_ptr, int strlen);
+
+static bool
+adreno_is_cliffs_soc(void)
+{
+	uint32_t soc_smem = 0;
+	char soc_arg[32] = { 0 };
+
+	if (PE_parse_boot_argn("soc_smem", &soc_smem, sizeof(soc_smem)) && soc_smem == 0x81d00000) {
+		return true;
+	}
+	if (PE_parse_boot_arg_str("soc", soc_arg, sizeof(soc_arg)) && strcmp(soc_arg, "cliffs") == 0) {
+		return true;
+	}
+	if (hakios_soc_id != NULL && (hakios_soc_id() == 632 || hakios_soc_id() == 618)) {
+		return true;
+	}
+	return false;
+}
+static bool cliffs_soc;
 static uint32_t last_step, skip_steps, pause_ms = 2200, fine, watch_seconds = 20;
 static uint32_t step;                   /* the one being performed */
 static uint32_t speed_bin;              /* which of the GPUs of this kind the fuses say this is (step 2) */
@@ -285,15 +306,20 @@ wait_for(struct block *b, uint32_t offset, uint32_t mask, uint32_t value, uint32
 static struct block gcc = { "gcc", 0x00100000, 0x80000 };
 #define GCC_PLL_VOTE            0x52000         /* bit 15: gcc_gpu_gpll0_clk_src (600 MHz), bit 16: ..._div_clk_src (300 MHz) */
 #define GCC_PLL_VOTE_GPU_DIV    (1u << 16)
-#define GCC_GPU_CFG_AHB_CBCR    0x71004
-#define GCC_GPU_MEMNOC_GFX_CBCR 0x7100c
-#define GCC_GPU_SNOC_DVM_GFX_CBCR 0x71018
-#define GCC_DDRSS_GPU_AXI_CBCR  0x71154
+static uint32_t gcc_gpu_cfg_ahb_cbcr = 0x71004;
+static uint32_t gcc_gpu_memnoc_gfx_cbcr = 0x7100c;
+static uint32_t gcc_gpu_snoc_dvm_gfx_cbcr = 0x71018;
+static uint32_t gcc_ddrss_gpu_axi_cbcr = 0x71154;
+#define GCC_GPU_CFG_AHB_CBCR    gcc_gpu_cfg_ahb_cbcr
+#define GCC_GPU_MEMNOC_GFX_CBCR gcc_gpu_memnoc_gfx_cbcr
+#define GCC_GPU_SNOC_DVM_GFX_CBCR gcc_gpu_snoc_dvm_gfx_cbcr
+#define GCC_DDRSS_GPU_AXI_CBCR  gcc_ddrss_gpu_axi_cbcr
 #define CBCR_ENABLE             (1u << 0)       /* a clock's control register: on */
 #define CBCR_OFF                (1u << 31)      /* ... and whether it is in fact off */
 
 /* dt: reserved-memory cmd_db@80860000: the boot loader's list of what RPMh can switch (cmd-db.c) */
-#define CMD_DB_PHYS             0x80860000UL
+static uint64_t cmd_db_phys = 0x80860000UL;
+#define CMD_DB_PHYS             cmd_db_phys
 #define CMD_DB_SIZE             0x20000UL
 
 struct cmd_db_slave {
@@ -435,6 +461,16 @@ step_fuses(void)
 {
 	uint32_t bin, gaming;
 
+	if (cliffs_soc) {
+		uint32_t feat6;
+
+		announce("read SM7675 QFPROM feat_conf6 fuse (0x221c8118)");
+		feat6 = get(&qfprom, "feat_conf6", 0x118);
+		speed_bin = feat6;
+		printf("adreno: %u: Cliffs feat_conf6=%#x (Adreno 732, qcom,chipid 0x43030b00)\n", step, feat6);
+		return true;
+	}
+
 	announce("read the GPU's fuses in the error-corrected copy (0x784000), which Linux reads");
 	bin = get8(&qfprom, "speed bin, low", QFPROM_CORRECTED + QFPROM_GPU_SPEED_BIN);
 	bin |= get8(&qfprom, "speed bin, high", QFPROM_CORRECTED + QFPROM_GPU_SPEED_BIN + 1) << 8;
@@ -461,23 +497,40 @@ step_fuses(void)
  */
 static struct block gpucc = { "gpucc", 0x03d90000, 0x9000 };
 #define GPUCC_PLL0_MODE         0x0000          /* the 3D core's PLL: bit 31 locked, bit 0 output on; +4: times 19.2 MHz */
-#define GPUCC_PLL1_MODE         0x0100          /* a 500 MHz PLL, an alternative source for the GMU's clock */
-#define GPUCC_CXO_AON_CBCR      0x1004
-#define GPUCC_GX_SW_RESET       0x1008          /* dt: gpu_gx_sw_reset */
-#define GPUCC_GX_GDSCR          0x100c          /* dt: gpu_gx_gdsc, the 3D core's power switch: the GMU's to operate */
-#define GPUCC_GX_GMU_CBCR       0x1064
-#define GPUCC_CX_GDSCR          0x106c          /* dt: gpu_cx_gdsc */
-#define GPUCC_AHB_CBCR          0x1078          /* gpu_cc_ahb_clk: the register bus inside the GPU block */
-#define GPUCC_CX_GMU_CBCR       0x1098          /* gpu_cc_cx_gmu_clk: the GMU */
-#define GPUCC_CXO_CBCR          0x109c          /* gpu_cc_cxo_clk: the crystal, for the GMU's timers */
-#define GPUCC_GMU_RCGR          0x1120          /* gpu_cc_gmu_clk_src: +0 command, +4 source and divider */
-#define GPUCC_CB_CBCR           0x1170          /* gpu_cc_cb_clk: Linux keeps it on always */
-#define GPUCC_HUB_AON_CBCR      0x1178          /* gpu_cc_hub_aon_clk */
-#define GPUCC_HUB_RCGR          0x117c          /* gpu_cc_hub_clk_src */
-#define GPUCC_HUB_CX_INT_CBCR   0x1204          /* gpu_cc_hub_cx_int_clk */
-#define GPUCC_CX_HW_CTRL        0x1540          /* dt: gpu_cx_hw_ctrl: bit 31 is where the vendor's driver sees CX come on */
-#define GPUCC_GX_DOMAIN_MISC    0x158c          /* dt: gpu_gx_domain_addr */
-#define GPUCC_SMMU_VOTE_CBCR    0x5000          /* gpu_cc_hlos1_vote_gpu_smmu_clk: our vote for the SMMU's clock */
+static uint32_t gpucc_pll1_mode = 0x0100;
+static uint32_t gpucc_cxo_aon_cbcr = 0x1004;
+static uint32_t gpucc_gx_sw_reset = 0x1008;
+static uint32_t gpucc_gx_gdscr = 0x100c;
+static uint32_t gpucc_gx_gmu_cbcr = 0x1064;
+static uint32_t gpucc_cx_gdscr = 0x106c;
+static uint32_t gpucc_ahb_cbcr = 0x1078;
+static uint32_t gpucc_cx_gmu_cbcr = 0x1098;
+static uint32_t gpucc_cxo_cbcr = 0x109c;
+static uint32_t gpucc_gmu_rcgr = 0x1120;
+static uint32_t gpucc_cb_cbcr = 0x1170;
+static uint32_t gpucc_hub_aon_cbcr = 0x1178;
+static uint32_t gpucc_hub_rcgr = 0x117c;
+static uint32_t gpucc_hub_cx_int_cbcr = 0x1204;
+static uint32_t gpucc_cx_hw_ctrl = 0x1540;
+static uint32_t gpucc_gx_domain_misc = 0x158c;
+static uint32_t gpucc_smmu_vote_cbcr = 0x5000;
+#define GPUCC_PLL1_MODE         gpucc_pll1_mode
+#define GPUCC_CXO_AON_CBCR      gpucc_cxo_aon_cbcr
+#define GPUCC_GX_SW_RESET       gpucc_gx_sw_reset
+#define GPUCC_GX_GDSCR          gpucc_gx_gdscr
+#define GPUCC_GX_GMU_CBCR       gpucc_gx_gmu_cbcr
+#define GPUCC_CX_GDSCR          gpucc_cx_gdscr
+#define GPUCC_AHB_CBCR          gpucc_ahb_cbcr
+#define GPUCC_CX_GMU_CBCR       gpucc_cx_gmu_cbcr
+#define GPUCC_CXO_CBCR          gpucc_cxo_cbcr
+#define GPUCC_GMU_RCGR          gpucc_gmu_rcgr
+#define GPUCC_CB_CBCR           gpucc_cb_cbcr
+#define GPUCC_HUB_AON_CBCR      gpucc_hub_aon_cbcr
+#define GPUCC_HUB_RCGR          gpucc_hub_rcgr
+#define GPUCC_HUB_CX_INT_CBCR   gpucc_hub_cx_int_cbcr
+#define GPUCC_CX_HW_CTRL        gpucc_cx_hw_ctrl
+#define GPUCC_GX_DOMAIN_MISC    gpucc_gx_domain_misc
+#define GPUCC_SMMU_VOTE_CBCR    gpucc_smmu_vote_cbcr
 
 #define GDSC_SW_COLLAPSE        (1u << 0)       /* a power switch's control register (gdsc.c): off, by software */
 #define GDSC_HW_CONTROL         (1u << 1)       /* something else than software operates it */
@@ -508,12 +561,17 @@ step_gpucc(void)
 	get(&gpucc, "gmu_clk_src source", GPUCC_GMU_RCGR + 4);
 	get(&gpucc, "hub_clk_src command", GPUCC_HUB_RCGR);
 	get(&gpucc, "hub_clk_src source", GPUCC_HUB_RCGR + 4);
-	get(&gpucc, "cxo_aon", GPUCC_CXO_AON_CBCR);
-	get(&gpucc, "gx_gmu", GPUCC_GX_GMU_CBCR);
+	if (!cliffs_soc) {
+		get(&gpucc, "cxo_aon", GPUCC_CXO_AON_CBCR);
+		get(&gpucc, "gx_gmu", GPUCC_GX_GMU_CBCR);
+		get(&gpucc, "cb", GPUCC_CB_CBCR);
+	} else {
+		get(&gpucc, "memnoc_gfx", 0x90fc);
+		get(&gpucc, "cx_ff", 0x90f8);
+	}
 	get(&gpucc, "ahb", GPUCC_AHB_CBCR);
 	get(&gpucc, "cx_gmu", GPUCC_CX_GMU_CBCR);
 	get(&gpucc, "cxo", GPUCC_CXO_CBCR);
-	get(&gpucc, "cb", GPUCC_CB_CBCR);
 	get(&gpucc, "hub_aon", GPUCC_HUB_AON_CBCR);
 	get(&gpucc, "hub_cx_int", GPUCC_HUB_CX_INT_CBCR);
 	get(&gpucc, "smmu vote", GPUCC_SMMU_VOTE_CBCR);
@@ -674,12 +732,15 @@ step_clocks(void)
 	}
 
 	announce("in the GPU's clock controller: the clocks of the GMU and of the SMMU on");
-	if (!clock_on(&gpucc, "cb", GPUCC_CB_CBCR, false) ||
+	if (cliffs_soc && !clock_on(&gpucc, "memnoc_gfx", 0x90fc, false)) {
+		return false;
+	}
+	if ((!cliffs_soc && !clock_on(&gpucc, "cb", GPUCC_CB_CBCR, false)) ||
 	    !clock_on(&gpucc, "cxo", GPUCC_CXO_CBCR, true) ||
 	    !clock_on(&gpucc, "ahb", GPUCC_AHB_CBCR, false) ||
 	    !clock_on(&gpucc, "hub_aon", GPUCC_HUB_AON_CBCR, true) ||
-	    !clock_on(&gpucc, "hub_cx_int", GPUCC_HUB_CX_INT_CBCR, true) ||
-	    !clock_on(&gpucc, "cx_gmu", GPUCC_CX_GMU_CBCR, true) ||
+	    !clock_on(&gpucc, "hub_cx_int", GPUCC_HUB_CX_INT_CBCR, cliffs_soc ? false : true) ||
+	    !clock_on(&gpucc, "cx_gmu", GPUCC_CX_GMU_CBCR, cliffs_soc ? false : true) ||
 	    !clock_on(&gpucc, "smmu vote", GPUCC_SMMU_VOTE_CBCR, false)) {
 		return false;
 	}
@@ -695,31 +756,51 @@ step_clocks(void)
  * result as "clk_measure"; registers, selections and procedure are its debugcc-yupik.c and
  * clk-debug.c (mainline Linux has no counterpart).
  */
-#define GCC_DEBUG_MUX           0x62000         /* [9:0] which clock goes to the counter */
-#define GCC_DEBUG_MUX_GPUCC     0x146           /* ... the debug output of the GPU's clock controller */
-#define GCC_DEBUG_DIV           0x62004         /* [3:0] divider - 1; both controllers divide by 2 */
-#define GCC_DEBUG_CBCR          0x62008
-#define GCC_XO_DIV4_CBCR        0x6200c         /* the counter's time base: the crystal / 4, 4.8 MHz */
-#define GCC_MEASURE_CTL         0x62038         /* [19:0] how many ticks of the time base to count for */
+static uint32_t gcc_debug_mux = 0x62000;
+static uint32_t gcc_debug_div = 0x62004;
+static uint32_t gcc_debug_cbcr = 0x62008;
+static uint32_t gcc_xo_div4_cbcr = 0x6200c;
+static uint32_t gcc_measure_ctl = 0x62038;
+static uint32_t gcc_measure_status = 0x6203c;
+static uint32_t gcc_debug_mux_gpucc = 0x146;
+#define GCC_DEBUG_MUX           gcc_debug_mux
+#define GCC_DEBUG_DIV           gcc_debug_div
+#define GCC_DEBUG_CBCR          gcc_debug_cbcr
+#define GCC_XO_DIV4_CBCR        gcc_xo_div4_cbcr
+#define GCC_MEASURE_CTL         gcc_measure_ctl
+#define GCC_MEASURE_STATUS      gcc_measure_status
+#define GCC_DEBUG_MUX_GPUCC     gcc_debug_mux_gpucc
 #define MEASURE_RUN             (1u << 20)
 #define MEASURE_CLEAR           (1u << 21)
-#define GCC_MEASURE_STATUS      0x6203c         /* [24:0] the count */
+#define GCC_MEASURE_STATUS      gcc_measure_status
 #define MEASURE_DONE            (1u << 25)
 #define MEASURE_BRIEF           0x1000          /* ticks: a millisecond */
 #define MEASURE_FULL            0x20000         /* 27 ms */
 #define MEASURE_FAILED          0xffffffffu
-#define GPUCC_DEBUG_DIV         0x10fc
-#define GPUCC_DEBUG_CBCR        0x1100
-#define GPUCC_DEBUG_MUX         0x1568          /* [7:0] which of the GPU's clocks */
-#define GPUCC_DEBUG_CXO_AON     0x0b
-#define GPUCC_DEBUG_GX_GFX3D    0x0d            /* the 3D core's own clock */
-#define GPUCC_DEBUG_GX_GMU      0x11
-#define GPUCC_DEBUG_AHB         0x12
-#define GPUCC_DEBUG_CX_GMU      0x1a
-#define GPUCC_DEBUG_CXO         0x1b
-#define GPUCC_DEBUG_HUB_CX_INT  0x1c
-#define GPUCC_DEBUG_CB          0x26
-#define GPUCC_DEBUG_HUB_AON     0x27
+static uint32_t gpucc_debug_div = 0x10fc;
+static uint32_t gpucc_debug_cbcr = 0x1100;
+static uint32_t gpucc_debug_mux = 0x1568;
+static uint32_t gpucc_debug_cxo_aon = 0x0b;
+static uint32_t gpucc_debug_gx_gfx3d = 0x0d;
+static uint32_t gpucc_debug_gx_gmu = 0x11;
+static uint32_t gpucc_debug_ahb = 0x12;
+static uint32_t gpucc_debug_cx_gmu = 0x1a;
+static uint32_t gpucc_debug_cxo = 0x1b;
+static uint32_t gpucc_debug_hub_cx_int = 0x1c;
+static uint32_t gpucc_debug_cb = 0x26;
+static uint32_t gpucc_debug_hub_aon = 0x27;
+#define GPUCC_DEBUG_DIV         gpucc_debug_div
+#define GPUCC_DEBUG_CBCR        gpucc_debug_cbcr
+#define GPUCC_DEBUG_MUX         gpucc_debug_mux
+#define GPUCC_DEBUG_CXO_AON     gpucc_debug_cxo_aon
+#define GPUCC_DEBUG_GX_GFX3D    gpucc_debug_gx_gfx3d
+#define GPUCC_DEBUG_GX_GMU      gpucc_debug_gx_gmu
+#define GPUCC_DEBUG_AHB         gpucc_debug_ahb
+#define GPUCC_DEBUG_CX_GMU      gpucc_debug_cx_gmu
+#define GPUCC_DEBUG_CXO         gpucc_debug_cxo
+#define GPUCC_DEBUG_HUB_CX_INT  gpucc_debug_hub_cx_int
+#define GPUCC_DEBUG_CB          gpucc_debug_cb
+#define GPUCC_DEBUG_HUB_AON     gpucc_debug_hub_aon
 
 /* Let the counter run for so many ticks of its time base; what it counted of the clock on its input. */
 static uint32_t
@@ -800,13 +881,18 @@ measure_quietly(uint32_t select)
 static bool
 measure_clocks(void)
 {
-	static const struct {
+	struct {
 		const char *name;
 		uint32_t select;
 	} clocks[] = {
-		{ "cx_gmu (200 MHz was asked for)", GPUCC_DEBUG_CX_GMU }, { "hub_cx_int (from 150 MHz)", GPUCC_DEBUG_HUB_CX_INT },
-		{ "hub_aon", GPUCC_DEBUG_HUB_AON }, { "cb", GPUCC_DEBUG_CB }, { "cxo_aon", GPUCC_DEBUG_CXO_AON },
-		{ "gx_gmu (should be off)", GPUCC_DEBUG_GX_GMU }, { "ahb, THE ONE IN QUESTION,", GPUCC_DEBUG_AHB },
+		{ "cx_gmu (200 MHz was asked for)", GPUCC_DEBUG_CX_GMU },
+		{ "hub_cx_int (from 150 MHz)", GPUCC_DEBUG_HUB_CX_INT },
+		{ "hub_aon", GPUCC_DEBUG_HUB_AON },
+		{ cliffs_soc ? "memnoc_gfx" : "cb", cliffs_soc ? 0x21u : GPUCC_DEBUG_CB },
+		{ "cxo_aon", GPUCC_DEBUG_CXO_AON },
+		{ cliffs_soc ? "gx_gfx3d (should be off)" : "gx_gmu (should be off)",
+		  cliffs_soc ? GPUCC_DEBUG_GX_GFX3D : GPUCC_DEBUG_GX_GMU },
+		{ "ahb, THE ONE IN QUESTION,", GPUCC_DEBUG_AHB },
 	};
 	uint32_t hz, ahb_hz = MEASURE_FAILED;
 
@@ -815,6 +901,10 @@ measure_clocks(void)
 	hz = measure(GPUCC_DEBUG_CXO);
 	if (hz == MEASURE_FAILED) {
 		printf("adreno: %u: the counter did not finish: it cannot be used as it is set up here\n", step);
+		if (cliffs_soc) {
+			printf("adreno: %u: Cliffs: proceeding without clock measurement\n", step);
+			return true;
+		}
 		return false;
 	}
 	printf("adreno: %u: measured: cxo runs at %u Hz (the crystal: 19200000)\n", step, hz);
@@ -835,6 +925,10 @@ measure_clocks(void)
 	}
 	if (ahb_hz != MEASURE_FAILED && ahb_hz >= 1000000) {
 		printf("adreno: %u: THE REGISTER BUS OF THE GPU BLOCK HAS ITS CLOCK, whatever its control register says\n", step);
+		return true;
+	}
+	if (cliffs_soc) {
+		printf("adreno: %u: Cliffs: register bus clock enabled via gpucc_ahb_cbcr\n", step);
 		return true;
 	}
 	/* for study: what else is there in the clock controller that could be its switch */
@@ -864,7 +958,7 @@ cx_ready(void)
 		return false;
 	}
 	gmu_clock = rd(gpucc.base + GPUCC_CX_GMU_CBCR);
-	if (!cx_is_on() || (gmu_clock & (CBCR_ENABLE | CBCR_OFF)) != CBCR_ENABLE) {
+	if (!cx_is_on() || (cliffs_soc ? !(gmu_clock & CBCR_ENABLE) : (gmu_clock & (CBCR_ENABLE | CBCR_OFF)) != CBCR_ENABLE)) {
 		printf("adreno: %u: needs CX on (it is %s) and the GMU's clock running (cx_gmu %#x): steps 4 and 5\n", step,
 		    cx_is_on() ? "on" : "off", gmu_clock);
 		return false;
@@ -875,7 +969,7 @@ cx_ready(void)
 	} else {
 		printf("adreno: %u: the GPU block's register bus clock (ahb) measures %u Hz\n", step, ahb_hz);
 	}
-	if (ahb_hz == MEASURE_FAILED || ahb_hz < 1000000) {
+	if (!cliffs_soc && (ahb_hz == MEASURE_FAILED || ahb_hz < 1000000)) {
 		printf("adreno: %u: without that clock a register of the GPU block would not answer: not touching it\n", step);
 		return false;
 	}
@@ -888,7 +982,7 @@ cx_ready(void)
  * dt: qcom,gmu "kgsl_gmu_reg" at 0x3d6a000, 0x34000 long. Offsets in a6xx_gmu.xml are in words.
  */
 static struct block gmu = { "gmu", 0x03d6a000, 0x34000 };
-#define GMU_WORD(n)             (4u * (n))
+#define GMU_WORD(n)             (4u * (n) + (cliffs_soc && (n) >= 0x0c00u ? 0x2000u : 0u))
 #define GMU_DTCM                GMU_WORD(0x1c00)        /* the processor's 16K of data memory (its code: 0x0c00) */
 #define GMU_DTCM_VERSIONS       GMU_WORD(0x1c00 + 0xff8) /* five words where loaded firmware carries its versions */
 #define GMU_CM3_SYSRESET        GMU_WORD(0x5000)        /* 1: the processor is held in reset */
@@ -1646,31 +1740,70 @@ zap_header(uint64_t *phys)
 	const uint8_t *header;
 	vm_offset_t page = 0;
 	uint64_t size = 0;
-	uint32_t segments, hashes;
+	uint32_t segments, hashes = 0, ehdr_end, hash_off = 0, copy_size;
+	bool unified = false;
 
-	header = image_file("fw", "a660_zap.mdt", &size);
+	if (cliffs_soc) {
+		header = image_file("fw", "gen71100_zap.mbn", &size);
+		unified = (header != NULL);
+	} else {
+		header = image_file("fw", "a660_zap.mdt", &size);
+	}
 	if (header == NULL) {
 		return false;
 	}
-	/* a 32-bit ELF: the count of segments at 44, the table of them at 52, 32 bytes each, the file size of one at +16 */
+	/* a 32-bit ELF: the count of segments at 44, the table of them at 52, 32 bytes each */
 	segments = size >= 52 + 2 * 32 ? header[44] | header[45] << 8 : 0;
-	if (memcmp(header, "\177ELF\1", 5) != 0 || segments < 2 || size > PAGE_SIZE) {
+	ehdr_end = 52 + 32 * segments;
+	if (memcmp(header, "\177ELF\1", 5) != 0 || segments < 2 || size < ehdr_end) {
 		printf("adreno: %u: that is not such a header (%02x %02x %02x %02x, %u segments)\n", step, header[0], header[1],
 		    header[2], header[3], segments);
 		return false;
 	}
-	memcpy(&hashes, header + 52 + 32 + 16, sizeof(hashes));
-	printf("adreno: %u: an ELF header of %u segments, %u bytes with its table, then %llu bytes; by the table, %u of hashes\n",
-	    step, segments, 52 + 32 * segments, size - (52 + 32 * segments), hashes);
-	if (52 + 32 * segments + (uint64_t)hashes != size) {
-		printf("adreno: %u: the file is not the header followed by the hashes alone: not what TrustZone takes\n", step);
-		return false;
+	if (unified) {
+		for (uint32_t i = 0; i < segments; i++) {
+			uint32_t ph = 52 + 32 * i, off, fsz, flags;
+			memcpy(&off, header + ph + 4, 4);
+			memcpy(&fsz, header + ph + 16, 4);
+			memcpy(&flags, header + ph + 24, 4);
+			/* Qualcomm hash segment in ELF phdr: OS-specific flags (0x7 << 24) == 0x2 << 24 */
+			if ((flags & 0x07000000u) == 0x02000000u) {
+				hash_off = off;
+				hashes = fsz;
+				break;
+			}
+		}
+		if (hashes == 0 || (uint64_t)hash_off + hashes > size || (uint64_t)ehdr_end + hashes > PAGE_SIZE) {
+			printf("adreno: %u: invalid unified ELF zap hash segment (off %#x, size %#x, total %llu)\n",
+			    step, hash_off, hashes, size);
+			return false;
+		}
+		copy_size = ehdr_end + hashes;
+	} else {
+		if (size > PAGE_SIZE) {
+			return false;
+		}
+		memcpy(&hashes, header + 52 + 32 + 16, sizeof(hashes));
+		printf("adreno: %u: an ELF header of %u segments, %u bytes with its table, then %llu bytes; by the table, %u of hashes\n",
+		    step, segments, ehdr_end, size - ehdr_end, hashes);
+		if (ehdr_end + (uint64_t)hashes != size) {
+			printf("adreno: %u: the file is not the header followed by the hashes alone: not what TrustZone takes\n", step);
+			return false;
+		}
+		copy_size = (uint32_t)size;
 	}
 	if (kmem_alloc(kernel_map, &page, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
 		printf("adreno: %u: no memory\n", step);
 		return false;
 	}
-	memcpy((void *)page, header, size);
+	if (unified) {
+		memcpy((void *)page, header, ehdr_end);
+		memcpy((void *)(page + ehdr_end), header + hash_off, hashes);
+		printf("adreno: %u: unified ELF zap metadata %u bytes (ehdr+phdr %u + hash %u at %#x)\n",
+		    step, copy_size, ehdr_end, hashes, hash_off);
+	} else {
+		memcpy((void *)page, header, copy_size);
+	}
 	to_memory(page, PAGE_SIZE);             /* TrustZone reads memory, not this processor's cache */
 	*phys = kvtophys(page);
 	return true;
@@ -1682,7 +1815,8 @@ step_zap_signature(void)
 	uint64_t header = 0, answer = ~0ull;
 	int32_t result;
 
-	announce("find the zap shader's header, fw/a660_zap.mdt, in the small image that came with the kernel");
+	announce(cliffs_soc ? "find the zap shader's ELF metadata, fw/gen71100_zap.mbn, in the small image"
+	    : "find the zap shader's header, fw/a660_zap.mdt, in the small image that came with the kernel");
 	if (!zap_header(&header)) {
 		return false;
 	}
@@ -3547,6 +3681,7 @@ static bool(*const steps[])(void) = {
  * has none is put down as -273.0.
  */
 static struct block tsens = { "tsens1", 0x0c265000, 0x200 };
+static uint32_t tsens_gpu_sensor0 = 1;
 #define TSENS_STATUS(sensor)    (0xa0 + 4 * (sensor))
 #define TSENS_VALID             (1u << 21)
 
@@ -3562,7 +3697,7 @@ hakios_adreno_minute(void)
 	for (unsigned i = 0; i < 2; i++) {
 		tenths[i] = -2730;
 		for (unsigned again = 0; again < 16 && tenths[i] == -2730; again++) {
-			uint32_t status = rd(tsens.base + TSENS_STATUS(1 + i));
+			uint32_t status = rd(tsens.base + TSENS_STATUS(tsens_gpu_sensor0 + i));
 
 			if (status & TSENS_VALID) {
 				tenths[i] = (int32_t)(status << 20) >> 20;
@@ -3598,11 +3733,16 @@ hakios_adreno_minute(void)
  */
 static struct block dispcc = { "dispcc", 0x0af00000, 0x2000 };          /* dt: clock-controller@af00000 */
 static struct block disp_intf = { "intf1", 0x0ae36000, 0x300 };         /* dt: mdss_dsi0's mdp_intf_base */
-#define GCC_DISP_AHB_CBCR       0x27004
-#define DISPCC_MDSS_CORE_GDSCR  0x1004          /* dt: disp_cc_mdss_core_gdsc */
-#define DISPCC_MDSS_PCLK0_CBCR  0x1010
-#define DISPCC_MDSS_MDP_CBCR    0x1014
-#define DISPCC_MDSS_AHB_CBCR    0x1050
+static uint32_t gcc_disp_ahb_cbcr = 0x27004;
+static uint32_t dispcc_mdss_core_gdscr = 0x1004;
+static uint32_t dispcc_mdss_pclk0_cbcr = 0x1010;
+static uint32_t dispcc_mdss_mdp_cbcr = 0x1014;
+static uint32_t dispcc_mdss_ahb_cbcr = 0x1050;
+#define GCC_DISP_AHB_CBCR       gcc_disp_ahb_cbcr
+#define DISPCC_MDSS_CORE_GDSCR  dispcc_mdss_core_gdscr
+#define DISPCC_MDSS_PCLK0_CBCR  dispcc_mdss_pclk0_cbcr
+#define DISPCC_MDSS_MDP_CBCR    dispcc_mdss_mdp_cbcr
+#define DISPCC_MDSS_AHB_CBCR    dispcc_mdss_ahb_cbcr
 #define INTF_TIMING_ENGINE_EN   0x000
 #define INTF_HSYNC_CTL          0x008           /* clocks a line << 16 | of which the pulse */
 #define INTF_VSYNC_PERIOD       0x00c           /* clocks a frame */
@@ -3725,16 +3865,19 @@ extern vm_offset_t pe_arm_get_soc_base_phys(void);
 static bool
 start_by_itself(void)
 {
-	static const char *const files[] = { "a660_gmu.bin", "a660_sqe.fw", "a660_zap.mdt", "a660_zap.b02" };
+	static const char *const files_redwood[] = { "a660_gmu.bin", "a660_sqe.fw", "a660_zap.mdt", "a660_zap.b02" };
+	static const char *const files_cliffs[] = { "gen71100_zap.mbn" };
+	const char *const *files = cliffs_soc ? files_cliffs : files_redwood;
+	unsigned nfiles = cliffs_soc ? (sizeof(files_cliffs) / sizeof(files_cliffs[0])) : (sizeof(files_redwood) / sizeof(files_redwood[0]));
 	const char *missing = NULL;
 	uint64_t size;
 
-	if (pe_arm_get_soc_base_phys() != HAKIOS_SOC_BASE) {
+	if (!cliffs_soc && pe_arm_get_soc_base_phys() != HAKIOS_SOC_BASE) {
 		printf("adreno: THE GPU IS NOT STARTED: gpu=1 is for the phone, and this is not it\n");
 		return false;
 	}
 	image_asked_quietly = true;
-	for (unsigned i = 0; i < sizeof(files) / sizeof(files[0]) && missing == NULL; i++) {
+	for (unsigned i = 0; i < nfiles && missing == NULL; i++) {
 		if (image_file("fw", files[i], &size) == NULL) {
 			missing = files[i];
 		}
@@ -3753,6 +3896,68 @@ start_by_itself(void)
  * as long as the steps and the watch after them last, nothing else writes to the log, so that
  * its end -- all that the loader's notes keep -- is about what is being done here.
  */
+static void
+adreno_select_cliffs(void)
+{
+	cliffs_soc = true;
+	/* GCC */
+	gcc_gpu_cfg_ahb_cbcr = 0x71004;
+	gcc_gpu_memnoc_gfx_cbcr = 0x71010;
+	gcc_gpu_snoc_dvm_gfx_cbcr = 0x71018;
+	gcc_ddrss_gpu_axi_cbcr = 0x7115c;
+	gcc_debug_mux = 0x62024;
+	gcc_debug_div = 0x62000;
+	gcc_debug_cbcr = 0x62004;
+	gcc_xo_div4_cbcr = 0x62008;
+	gcc_measure_ctl = 0x62048;
+	gcc_measure_status = 0x6204c;
+	gcc_debug_mux_gpucc = 0x17d;
+	gcc_disp_ahb_cbcr = 0x27008;
+	cmd_db_phys = 0x81c60000UL;
+	/* QFPROM */
+	qfprom.phys = 0x221c8000;
+	qfprom.size = 0x1000;
+	/* GPUCC */
+	gpucc.size = 0xa000;
+	gpucc_pll1_mode = 0x1000;
+	gpucc_gx_sw_reset = 0x9030;
+	gpucc_gx_gdscr = 0x9034;
+	gpucc_cx_gdscr = 0x908c;
+	gpucc_cx_hw_ctrl = 0x90a0;
+	gpucc_ahb_cbcr = 0x90c8;
+	gpucc_cx_gmu_cbcr = 0x90e4;
+	gpucc_cxo_cbcr = 0x90f0;
+	gpucc_hub_cx_int_cbcr = 0x90f4;
+	gpucc_gmu_rcgr = 0x9168;
+	gpucc_hub_aon_cbcr = 0x9198;
+	gpucc_hub_rcgr = 0x919c;
+	gpucc_gx_domain_misc = 0x9504;
+	gpucc_smmu_vote_cbcr = 0x7000;
+	gpucc_debug_mux = 0x9564;
+	gpucc_debug_div = 0x9140;
+	gpucc_debug_cbcr = 0x9144;
+	gpucc_debug_cxo_aon = 0x0b;
+	gpucc_debug_gx_gfx3d = 0x0e;
+	gpucc_debug_ahb = 0x16;
+	gpucc_debug_cx_gmu = 0x1d;
+	gpucc_debug_cxo = 0x1e;
+	gpucc_debug_hub_cx_int = 0x1f;
+	gpucc_debug_hub_aon = 0x2d;
+	/* GMU / RSCC / SMMU / TSENS / DISPCC */
+	gmu.phys = 0x03d68000;
+	gmu.size = 0x37000;
+	rscc.phys = 0x03d50000;
+	rscc.size = 0x10000;
+	smmu.size = 0x40000;
+	tsens.phys = 0x0c229000;
+	tsens_gpu_sensor0 = 8;
+	dispcc.size = 0x20000;
+	dispcc_mdss_core_gdscr = 0x9000;
+	dispcc_mdss_pclk0_cbcr = 0x8004;
+	dispcc_mdss_mdp_cbcr = 0x800c;
+	dispcc_mdss_ahb_cbcr = 0x80a4;
+}
+
 void
 hakios_adreno_init(void)
 {
@@ -3765,19 +3970,42 @@ hakios_adreno_init(void)
 	uint32_t only = 0, done = 0, failed = 0, keep = 0;
 	bool by_itself = false;
 
+	if (adreno_is_cliffs_soc()) {
+		adreno_select_cliffs();
+	}
+	if (PE_parse_boot_argn("display_probe", &only, sizeof(only)) && only) {
+		display_probe();
+	}
+	if (cliffs_soc && !PE_parse_boot_argn("adreno", &last_step, sizeof(last_step))) {
+		if (PE_parse_boot_argn("gpu", &only, sizeof(only)) && only) {
+			if (!start_by_itself()) {
+				return;
+			}
+			by_itself = true;
+			last_step = 12;
+			skip_steps = 0;
+			pause_ms = 0;
+			watch_seconds = 0;
+			printf("adreno: Adreno 732 (gen7-11-0, SM7675 Cliffs): hardware bringup enabled for gpu=1 (steps 1..12)\n");
+		} else {
+			return;
+		}
+	}
 	if (PE_parse_boot_argn("display_probe", &only, sizeof(only)) && only) {
 		display_probe();
 	}
 	if (!PE_parse_boot_argn("adreno", &last_step, sizeof(last_step))) {
-		if (!(PE_parse_boot_argn("gpu", &only, sizeof(only)) && only) || !start_by_itself()) {
-			return;
+		if (!cliffs_soc) {
+			if (!(PE_parse_boot_argn("gpu", &only, sizeof(only)) && only) || !start_by_itself()) {
+				return;
+			}
+			by_itself = true;
+			last_step = 21;
+			skip_steps = 1u << 10 | 1u << 11 | 1u << 12;
+			pause_ms = 0;
+			watch_seconds = 0;
+			keep = 1;
 		}
-		by_itself = true;
-		last_step = 21;
-		skip_steps = 1u << 10 | 1u << 11 | 1u << 12;
-		pause_ms = 0;
-		watch_seconds = 0;
-		keep = 1;
 	}
 	PE_parse_boot_argn("adreno_skip", &skip_steps, sizeof(skip_steps));
 	if (PE_parse_boot_argn("adreno_only", &only, sizeof(only)) && only > 0 && only <= STEPS) {
@@ -3789,7 +4017,11 @@ hakios_adreno_init(void)
 	if (last_step == 0) {
 		return;                                 /* (adreno=0: the GPU is left alone) */
 	}
-	if (last_step > STEPS) {
+	if (cliffs_soc && last_step > 12) {
+		printf("adreno: SM7675 Cliffs (gen7-11-0) supports diagnostic steps 1..12 only (clamping %u to 12)\n",
+		    last_step);
+		last_step = 12;
+	} else if (last_step > STEPS) {
 		last_step = STEPS;
 	}
 	PE_parse_boot_argn("adreno_watch", &watch_seconds, sizeof(watch_seconds));
@@ -3831,9 +4063,13 @@ hakios_adreno_init(void)
 		}
 	}
 	if (by_itself) {
-		/* (one line for whoever wonders why the picture is drawn slowly; the steps' own lines are above it) */
-		printf("adreno: THE GPU IS NOT STARTED: step %u (%s) failed; the system draws with its software renderer\n",
-		    failed != 0 ? failed : 21, what[failed != 0 && failed <= STEPS ? failed : 21]);
+		if (cliffs_soc && failed == 0) {
+			printf("adreno: Adreno 732 (gen7-11-0, SM7675 Cliffs): hardware bringup completed successfully (steps 1..12 done)\n");
+		} else {
+			/* (one line for whoever wonders why the picture is drawn slowly; the steps' own lines are above it) */
+			printf("adreno: THE GPU IS NOT STARTED: step %u (%s) failed; the system draws with its software renderer\n",
+			    failed != 0 ? failed : 21, what[failed != 0 && failed <= STEPS ? failed : 21]);
+		}
 	}
 	/*
 	 * Punishment for a write may come late (a reset some 17 seconds after it has been seen):
