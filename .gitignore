@@ -26,11 +26,9 @@
 !/drivers/
 !/docs/
 !/xl
-!/mkxnuimg.py
 !/xnu-build.sh
 !/xnu-env.sh
 !/xnuloader/
-!/qemu/
 !/tools/
 !/userland/
 !/sysimage/
@@ -43,6 +41,12 @@ __pycache__/
 *~
 *.orig
 *.rej
+/AGENT.md
+/agent.md
+/scripts/
+*.log
+log*.txt
+/logs/
 
 /xnuloader/*
 !/xnuloader/build.sh
@@ -51,9 +55,6 @@ __pycache__/
 !/xnuloader/mkidentity.py
 !/xnuloader/mkpayload.py
 
-/qemu/*
-!/qemu/*.sh
-!/qemu/*.py
 
 /userland/*
 !/userland/build.sh
@@ -120,7 +121,7 @@ __pycache__/
 /devices/*
 !/devices/manifest.conf
 !/devices/README.md
-!/devices/qemu/
+!/devices/avalon/
 
 # Android platform-tools for xl on a Mac (tools/macos-bin/README.md): not part of the repository
 /tools/macos-bin/platform-tools

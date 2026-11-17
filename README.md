@@ -1,62 +1,85 @@
-# HakiOS
+# HakiOS for OnePlus Nord 4 (avalon)
 
-English · [中文](README.zh.md) · [Українська](README.uk.md)
+Hey everyone! Welcome to my port of Apple Darwin XNU kernel for the OnePlus Nord 4 (codename avalon, powered by Qualcomm SM7675 Snapdragon 7 plus Gen 3 Cliffs).
 
-**Apple's open-source Darwin kernel (XNU, xnu-8796.121.2) on Android phones**, the way Android is Linux on phones: a boot loader of its
-own, drivers of its own, a configuration system and a version of its own. The same kernel runs in QEMU with nothing of Apple's and
-nothing of any phone's (`make qemu-open`). A research bench, not a ROM: by default it runs from RAM, and a reboot gives the phone back to
-Android.
+This is a hobby research project exploring how to boot Apple Darwin XNU kernel directly on modern Android hardware with custom U Boot, our own UEFI loader, and custom drivers.
 
-**Documentation:** [docs/](docs/index.md), and the site, [hackios-web.vercel.app](https://hackios-web.vercel.app).
+Best part: it runs purely in RAM via fastboot. It does not flash or mess up your Android system partitions, so when you restart your phone you are immediately back to your normal Android setup.
 
-**News, 4 November 2026:** on the POCO X5 Pro 5G the window server draws through Metal on the Adreno 642L, two ways. hakios-metal: page
-swipes 110 to 115 frames a second, Settings' scroll 118, the home button 106, rendering at 828x1792 stretched to the panel; 101, about 90 and about 90 at the full 1125x2436. UniXNU's Metal on Vulkan: swipes 50 to 57, scroll 41. The panel is 120 Hz,
-and **120 frames a second has not been reached**. [Metal on the Adreno](docs/reference/metal.md),
-[the measurements](docs/reference/metal-measurements.md).
+## What is in this repository
 
-Start with [Getting started](docs/getting-started/index.md), [On the phone](docs/getting-started/phone.md) or
-[Port a device](docs/porting/index.md). What works, part by part: [the documentation's front page](docs/index.md#what-works).
+1. Custom drivers for Qualcomm SM7675 Cliffs (GPU, Touch, Display, WiFi, Bluetooth, Audio, Power).
+2. UEFI loader and U Boot setup tailored for avalon.
+3. Apple Darwin XNU kernel patches and configuration.
+4. Minimal userspace and testing tools.
 
-## Repositories
+## Firmware Blobs Note
 
-| Repository | Contents |
-|---|---|
-| [hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel) | **common**: the kernel port, every common driver, the loader, user space, the tools, this documentation, and `devices/qemu` |
-| [`hakios-metal/`](hakios-metal) | Metal's command model on the Adreno, through the kernel's GPU driver |
-| [hakios-sm7325](https://github.com/oosexgang/hakios-sm7325) | POCO X5 Pro 5G: its defconfig, status, UEFI platform, firmware script, and its SoC's layer (Qualcomm SC7280 family) |
-| [hakios-mt6768](https://github.com/oosexgang/hakios-mt6768) | Infinix Hot 20 (MediaTek Helio G85): an experimental port with its own loader. Not in this repository's manifest |
-| [hakios-uefi](https://github.com/oosexgang/hakios-uefi) | the firmware that starts the loader: Mu-Silicium with HakiOS's boot path, banner and name, and HakiOS's U-Boot |
-| [hackios-web](https://github.com/oosexgang/hackios-web) | the website |
-| [hackios-xnu-userland](https://github.com/oosexgang/hackios-xnu-userland) | old: a pointer kept for its links. User space is `userland/` here |
+To respect copyright, absolutely zero proprietary firmware blobs are hosted in this repository.
 
-How they fit: [the repositories](docs/porting/repositories.md).
+You have to pull firmware blobs from your own device or an official OxygenOS or ColorOS update package (payload.bin).
 
-## What you bring, and what is never here
+Here is how you extract the blobs:
 
-Nothing of Apple's and no vendor's firmware is in these repositories. The Darwin user space, if you want it, you lay out yourself from an
-IPSW you get yourself, and the firmware comes off your own phone; nothing is downloaded for you, decrypted or circumvented. Apple's
-services (activation, Apple ID, iCloud, the App Store) are not supported and not a goal.
-[What is in the repository, and what never is](docs/index.md#what-is-in-the-repository-and-what-never-is).
+1. Obtain your stock ROM dump folder, or grab payload.bin from the official OnePlus update zip.
+2. Run the extraction tool:
+```bash
+python3 devices/avalon/extract-blobs.py /path/to/stock_dump_or_payload.bin
+```
+3. The tool automatically finds and parses modem, bluetooth, adsp, wpss wifi, touch firmware, and gpu zap shaders, placing them into local fw folders.
 
-## Contributing
+## How to Build
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [COMMUNITY.md](COMMUNITY.md).
+Follow these steps in your terminal to build the project from source:
 
-## License and legal
+1. Sync the hardware drivers into the kernel source tree:
+```bash
+./xnu/sync-drivers.sh
+```
 
-The XNU patch and the files derived from it are under the Apple Public Source License 2.0 ([LICENSE.APSL](LICENSE.APSL)), the rest under
-MIT ([LICENSE](LICENSE)), as the file headers say. Third parties: [NOTICE](NOTICE),
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md), [COMPLIANCE.md](COMPLIANCE.md). What is and is not distributed: [LEGAL.md](LEGAL.md).
-None of this is legal advice.
+2. Compile the Darwin XNU kernel:
+```bash
+./xnu-build.sh
+```
 
-HakiOS is an independent research project. It is **not affiliated with or endorsed by Apple**; "Darwin", "iPhone", "XNU" and "Apple" are
-named only to describe what the code works with. If you believe a file here infringes anyone's rights, open an issue and it will be
-removed.
+3. Optionally build the userspace rootfs:
+```bash
+./userland/build.sh
+```
 
-## Team
+4. Package the fastboot boot image:
+```bash
+./tools/boot-avalon.sh
+```
 
-hakios is an experimental project focused on bringing darwin to android hardware. our goal is to make hakios free and accessible to everyone.
+This generates the bootable image file in the project root.
 
-@oodze - founder, @netusd - advertising / ceo-dev, @wannqn - dev, @hxfuxyyXD - dev, Rhaenja Hun（杭润嘉） - developer / sponsor
+## Manual Testing on Your Phone
 
-tym sicilium for the sources!
+You do not need any automated scripts to test this on your phone. Everything can be done manually using plain fastboot commands.
+
+1. Turn off your OnePlus Nord 4 completely.
+2. Hold down the Volume Down and Power buttons together until you see the Fastboot mode screen.
+3. Connect your phone to your computer using a USB cable.
+4. Verify that fastboot sees your device:
+```bash
+fastboot devices
+```
+5. Boot the image directly from RAM without flashing anything:
+```bash
+fastboot boot hakios-avalon-ios.img
+```
+6. What to expect on your phone screen:
+The display keeps the continuous splash, U Boot initializes, hands the framebuffer over to Darwin, the Apple logo appears, and the XNU kernel boots with console messages.
+7. Returning back to Android:
+Whenever you want to exit or return to Android, hold down the Power button to force restart, or run:
+```bash
+fastboot reboot
+```
+Because the image was loaded purely into RAM, your internal UFS storage was never touched and your Android data is completely safe.
+
+## Disclaimer and License
+
+Kernel modifications are licensed under Apple Public Source License 2.0 (APSL). Our original loader code, custom drivers, and helper tools are licensed under the MIT License.
+
+This project is an independent educational effort and is not affiliated with, sponsored by, or endorsed by Apple Inc or OnePlus Technology.
