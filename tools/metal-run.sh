@@ -63,14 +63,13 @@ UPLOAD=${UPLOAD:-1}
 SHOTS=${SHOTS:-0}
 CA_METALLIB=${CA_METALLIB:-/redwood/share/ca-share/QuartzCore-default.metallib}
 # what is the phone's own: its big core and cores, its panel's rate, how many threads copy frames, how often the touch screen is read.
-# DEVICE_ARGS= names them, or devices/<CONFIG_DEVICE>/metal.args (tools/hakios-device.py new makes one). Without either, on a phone that
-# is not redwood, what assumes nothing: a wrong bootcpu= does not boot and a wrong fb_hz= shows every frame's beat wrong.
+# DEVICE_ARGS= names them, or devices/<CONFIG_DEVICE>/metal.args (tools/hakios-device.py new makes one). Without either, defaults to avalon's settings unless another device is active.
 if [ -z "${DEVICE_ARGS:-}" ]; then
 	device=$(sed -n 's/^CONFIG_DEVICE="\(.*\)"/\1/p' .config 2>/dev/null)
 	if [ -n "$device" ] && [ -f "devices/$device/metal.args" ]; then
 		DEVICE_ARGS=$(grep -v '^#' "devices/$device/metal.args" | tr '\n' ' ')
-	elif [ -z "$device" ] || [ "$device" = redwood ]; then
-		DEVICE_ARGS="bootcpu=7 cpus=8 cpufreq=1 fb_hz=120 fb_threads=6 touch_poll_us=4000"
+	elif [ -z "$device" ] || [ "$device" = avalon ]; then
+		DEVICE_ARGS=$(grep -v '^#' "devices/avalon/metal.args" | tr '\n' ' ')
 	else
 		DEVICE_ARGS="fb_hz=60 fb_threads=3"
 		echo "metal-run: no devices/$device/metal.args: fb_hz=60 and one boot core; docs/porting/index.md" >&2

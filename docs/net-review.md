@@ -31,7 +31,7 @@ here — see the roadmap below), and the non-network virtio devices.
 was found in the reviewed code.** Bounds are checked at the trust boundaries (user space via
 `copyin`/`copyout`, and over-the-air beacon data), ring invariants are maintained correctly, and
 the cache is synchronised around every DMA buffer. The items below are latent portability concerns
-and optional hardening — not live bugs on the POCO X5 Pro.
+and optional hardening — not live bugs on supported hardware.
 
 ## What was verified correct (not just "looks fine")
 
@@ -80,8 +80,7 @@ if (wp < base || wp >= base + ch->slots * ELEMENT_SIZE) { ... return 0; }
 
 Both the hardware write pointer and the ring base are truncated to 32 bits. This is correct as long
 as the event ring's physical address — and the whole ring — sit in the low 4 GB, or at least do not
-straddle a 4 GB boundary. On the POCO X5 Pro the data path comes up, so today this holds. On a
-future port whose DDR layout places a GSI event ring above 4 GB, the comparison and the index math
+straddle a 4 GB boundary. On a port whose DDR layout places a GSI event ring above 4 GB, the comparison and the index math
 break silently (the "write pointer outside the ring" path, line 482).
 
 - **Risk:** medium for porting, none for the current device.

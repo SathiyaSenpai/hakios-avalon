@@ -8,17 +8,15 @@ the drivers themselves: `CONFIG_HAKIOS_<NAME>` decides whether a driver is compi
 `options` and `conf/files` ([drivers-config.md](drivers-config.md)), so that a device's defconfig builds the drivers that phone has.
 
 ```
-configs/defconfig             what every configuration starts from: the OPEN one (nothing of a phone's own, one core)
-configs/common_defconfig      THE COMMON KERNEL: every setting there is, each with what it does (about 1000 lines)
-configs/sc7280.config         the Qualcomm SC7280 family (SM7325, QCM6490): eight cores, the sensors, the chip's identity
-configs/redwood.config        the POCO X5 Pro 5G: its vibration motor, where its modem's buffer is
-configs/redwood_defconfig     a phone: #include common_defconfig, sc7280.config, redwood.config (three lines)
-configs/qemu_defconfig        QEMU's virt machine: the phone's drivers left out of the kernel (CONFIG_HAKIOS_*)
-configs/open.config           fragment: the open profile (CONFIG_FIRMWARE="none")
-configs/virt.config           fragment: QEMU's virt machine (virtio network)
-configs/trace.config          fragment: log a line for each of the first frames on the network interfaces
-configs/persist.config        fragment: keep /private/var across reboots (THIS WRITES TO THE PHONE, partition `darwin`)
-configs/symbols.tsv           the symbols that are made from the source (see below); do not edit
+configs/defconfig                           what every configuration starts from: the OPEN one (nothing of a phone's own, one core)
+configs/common_defconfig                    THE COMMON KERNEL: every setting there is, each with what it does (about 1000 lines)
+devices/avalon/soc/configs/cliffs.config    Qualcomm SM7675 Cliffs: eight cores, thermal, PMIC, CPUFREQ, buttons
+devices/avalon/configs/avalon.config        OnePlus Nord 4: 120 Hz display, S3910 touch, AW86927 haptics, UFS
+devices/avalon/configs/avalon_defconfig     a phone: #include common_defconfig, cliffs.config, avalon.config
+configs/open.config                         fragment: the open profile (CONFIG_FIRMWARE="none")
+configs/trace.config                        fragment: log a line for each of the first frames on the network interfaces
+configs/persist.config                      fragment: keep /private/var across reboots (THIS WRITES TO THE PHONE, partition `darwin`)
+configs/symbols.tsv                         the symbols that are made from the source (see below); do not edit
 ```
 
 The common kernel does not say which phone it is for. A phone is the common kernel plus the facts of its SoC plus its own, which
@@ -27,10 +25,10 @@ is how Android builds a device's kernel; a new device adds a fragment and a thre
 ## Use
 
 ```bash
-make redwood_defconfig                  # .config = defconfig + common_defconfig + sc7280.config + redwood.config
-make redwood_defconfig FRAGMENTS=trace  # ... and a fragment on top
+make avalon_defconfig                   # .config = defconfig + common_defconfig + cliffs.config + avalon.config
+make avalon_defconfig FRAGMENTS=trace   # ... and a fragment on top
 make common_defconfig                   # the common kernel alone, for a phone that has no fragments yet
-make virt.config                        # lay a fragment over the .config there is
+make trace.config                       # lay a fragment over the .config there is
 make config                             # show it: symbols, the kernel's arguments, the firmware it wants
 make savedefconfig                      # the .config as a minimal defconfig (what differs from configs/defconfig)
 make phone                              # with a .config, ITS arguments are the kernel's
@@ -79,9 +77,8 @@ modem switches, `CONFIG_FIRMWARE="device"`), and why `-o` exists.
 ## `#include`: putting a device together
 
 A line `#include NAME` in a defconfig or fragment (a comment to any other reader) stands for `configs/NAME`, `NAME_defconfig` or
-`NAME.config`, laid first; the including file wins over what it includes; a loop is an error. This is the whole of
-`redwood_defconfig`. The order for `make redwood_defconfig` is `defconfig` (open, one core), then the common kernel, then the
-SoC, then the phone, then the fragments you named.
+`avalon_defconfig`. The order for `make avalon_defconfig` is `defconfig` (open, one core), then the common kernel, then the
+SoC (`cliffs.config`), then the phone (`avalon.config`), then any fragments you named.
 
 ## What is checked, and why
 
@@ -107,7 +104,7 @@ word is `name=value` with no space, quote or backslash in it; and the words coun
 | | Linux / Android | here |
 |---|---|---|
 | the common kernel | `gki_defconfig` | `common_defconfig` |
-| a SoC, a device | vendor and device fragments, `build.config` | `sc7280.config`, `redwood.config`, `#include` |
+| a SoC, a device | vendor and device fragments, `build.config` | `cliffs.config`, `avalon.config`, `#include` |
 | a fragment | `kernel/configs/*.config`, `merge_config.sh` | `configs/*.config`, `make NAME.config` |
 | the result | `.config`, compiled in | `.config`: the drivers compiled in (`CONFIG_HAKIOS_*`), the rest becomes the boot-arguments |
 | a driver's options | `Kconfig` + `obj-$(CONFIG_X) += x.o` | `drivers/<subsystem>/conf`, XNU's `options` and `optional` in `conf/files` |

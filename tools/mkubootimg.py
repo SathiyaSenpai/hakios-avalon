@@ -40,7 +40,7 @@ def container(entries):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('-d', '--device', default='redwood')
+    ap.add_argument('-d', '--device', default='avalon')
     ap.add_argument('-u', '--u-boot', help='default: u-boot/build-DEVICE/u-boot.bin, else devices/DEVICE/prebuilt/u-boot.bin')
     ap.add_argument('-l', '--loader', help='loader.efi (default: xnuloader/loader.efi, else prebuilt/loader.efi)')
     ap.add_argument('-p', '--payload', help='an XNUP payload (xnuloader/mkpayload.py)')
@@ -48,6 +48,8 @@ def main():
     ap.add_argument('-c', '--container', help='write the HKUB container on its own (for fastboot stage); without -o, only it')
     ap.add_argument('--no-ramdisk', action='store_true', help='U-Boot only: it waits for the loader over fastboot')
     ap.add_argument('--env', help='an environment for U-Boot to take with the loader (name=value lines): what the image does')
+    ap.add_argument('--header-version', type=int, default=None,
+                    help='boot image header version (default: 4 for avalon, 1 otherwise)')
     ap.add_argument('--install', action='store_true',
                     help='the image for a boot partition: with devices/DEVICE/u-boot/install.env (the menu: Android or HakiOS)')
     args = ap.parse_args()
@@ -106,12 +108,20 @@ def main():
 
     out = args.output or os.path.join(ROOT, 'hakios-u-boot.img')
     kernel, ramdisk = out + '.kernel~', out + '.ramdisk~'
-    open(kernel, 'wb').write(gzip.compress(u_boot, 6) + open(dtb, 'rb').read())
-    # no container: one zero byte for ABL, which hakios load does not take, so U-Boot waits for the host instead
+    hdr_ver = args.header_version or (4 if args.device == 'avalon' else 1)
+    extra_boot_args = []
+    if hdr_ver == 2:
+        open(kernel, 'wb').write(gzip.compress(u_boot, 6))
+        extra_boot_args = ['--dtb', dtb]
+    elif hdr_ver >= 3:
+        open(kernel, 'wb').write(gzip.compress(u_boot, 6) + open(dtb, 'rb').read())
+        extra_boot_args = ['--os_version', '14.0.0', '--os_patch_level', '2024-05']
+    else:
+        open(kernel, 'wb').write(gzip.compress(u_boot, 6) + open(dtb, 'rb').read())
     open(ramdisk, 'wb').write(hkub or b'\0')
     try:
         subprocess.check_call([sys.executable, mkbootimg, '--kernel', kernel, '--ramdisk', ramdisk,
-                               '--header_version', '1', '-o', out])
+                               '--header_version', str(hdr_ver)] + extra_boot_args + ['-o', out])
     finally:
         os.unlink(kernel)
         os.unlink(ramdisk)

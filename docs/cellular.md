@@ -1,7 +1,6 @@
 # Cellular
 
-Where the modem stands (October 2026). The detailed, step-by-step diary in Russian is
-`docs/ru/cellular.md`.
+Where the modem stands (`hakios.mpss.c`, `hakios.ipa.c`).
 
 ## What works
 
@@ -60,12 +59,10 @@ for IPA 4.11; everything is in `drivers/modem/hakios.ipa.c` and `hakios.cell.c`.
 
 ## Another phone: the SoC addresses
 
-The modem and IPA drivers carry the POCO X5 Pro's register and memory addresses as defaults and
-take any that differ from boot-args `soc_*` (`hakios.mpss.c` `soc_override()`, `hakios.ipa.c`).
+The modem and IPA drivers take `soc_*` overrides from boot-args (`hakios.mpss.c` `soc_override()`, `hakios.ipa.c`).
 `tools/soc-args.py` reads a phone's own device tree (`devices/<name>/pull-soc.sh` pulls
 `/sys/firmware/fdt` over adb) and prints the `soc_*` it needs; the run scripts append
-`devices/<name>/soc.args`. For the first phone every generated value equals the default, so it
-needs no arguments.
+`devices/<name>/soc.args`.
 
 ## Not yet
 

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """tools/hakios-config.py: what the configurations of configs/ give, and what the tool refuses.
 
-  the real configs/   redwood gives exactly the arguments the project's phone line used before there were configurations
-                      (so choosing it changes nothing); redwood + open loads nothing of the phone's own; persist adds the
-                      writes to `darwin`; virt and trace do what they say; kernel.ver carries -sc7280
+  the real configs/   avalon gives its configured arguments, avalon + open loads nothing of the phone's own,
+                      persist adds the writes to `darwin`, trace sets net_trace=20, and kernel.ver carries -cliffs
   refusals            an unknown symbol (with a suggestion), a firmware option in the open profile, a dependency that is
                       missing, a number out of range, a bad hex or string, a command line that cannot fit
   drivers             CONFIG_HAKIOS_* from drivers/*/conf: built in unless a configuration says otherwise; `is not set` leaves one
@@ -24,9 +23,6 @@ ROOT = os.path.dirname(HERE)
 TOOL = os.path.join(HERE, "hakios-config.py")
 failures = []
 
-# what `make phone` passed before there were configurations: the runner's four, then the Makefile's ARGS
-OLD_PHONE_LINE = ("bootcpu=7 cpus=8 cpufreq=1 ufs=2 touchscreen=1 gpu=1 adsp=1 sound=4 wifi=1 haptic=5 modem=1 modem_again=1 "
-                  "modem_buffer=0xa8000000").split()
 
 
 def check(label, ok, detail=""):
@@ -45,75 +41,64 @@ def args_of(out):
     return out.stdout.split()
 
 
-# The reference phone's configuration is what most of this checks against: its repositories (devices/redwood, with its SoC layer) are
-# their own, and a checkout of the common repository alone does not have them until `tools/hakios-device.py sync` clones them.
-if not (os.path.isdir(os.path.join(ROOT, "devices", "redwood", "configs")) and os.path.isdir(os.path.join(ROOT, "devices", "redwood", "soc", "configs"))):
-    print("hakios-config-test: SKIPPED: it checks the reference phone's configuration, and devices/redwood is not "
-          "checked out (tools/hakios-device.py sync redwood)")
+if not (os.path.isdir(os.path.join(ROOT, "devices", "avalon", "configs")) and os.path.isdir(os.path.join(ROOT, "devices", "avalon", "soc", "configs"))):
+    print("hakios-config-test: SKIPPED: devices/avalon is not checked out")
     sys.exit(0)
 
 work = tempfile.mkdtemp(prefix="hakios-config-test-")
 try:
     cfg = os.path.join(work, "cfg")
 
-    r = run("defconfig", "redwood", "-o", cfg)
-    check("defconfig redwood: makes the .config", r.returncode == 0 and os.path.isfile(cfg), r.stdout + r.stderr)
+    r = run("defconfig", "avalon", "-o", cfg)
+    check("defconfig avalon: makes the .config", r.returncode == 0 and os.path.isfile(cfg), r.stdout + r.stderr)
     a = args_of(run("args", "--config", cfg))
-    # the phone line from before there were configurations, plus the two things the SC7280 fragment turns on (the chip's identity
-    # and the sensors) and the two of redwood.config's panel (120 Hz frames, CoreAnimation clocked by the driver)
-    # and redwood.config's four big cores (cpus=4) instead of the line's eight
-    PANEL = ["fb_hz=120", "ca_vbl=1"]
-    want = ["cpus=4" if x == "cpus=8" else x for x in OLD_PHONE_LINE] + ["socinfo=1", "thermal=1"] + PANEL
-    check("redwood: the project's phone line before configurations, plus socinfo and thermal, the panel's 120 Hz and the big cores",
-          sorted(a) == sorted(want), "got %s\nwant %s" % (sorted(a), sorted(want)))
-    check("redwood: kernel.ver carries the SoC", "-sc7280-" in r.stdout, r.stdout)
-    check("redwood: the .config is in Linux's form",
-          "CONFIG_GPU=y" in open(cfg).read() and "# CONFIG_CAM is not set" in open(cfg).read() and 'CONFIG_FIRMWARE="device"' in open(cfg).read())
-    check("redwood: check passes", run("check", "--config", cfg).returncode == 0)
+    AVALON_ARGS = "cpus=8 bootcpu=7 cpufreq=1 ufs=2 touchscreen=1 touch_debug=1 gpu=1 metal=1 metal_fps=1 modem=1 modem_buffer=0x99900000 modem_verbose=1 haptic=5 bt=1 socinfo=1 thermal=1 thermal_stop=95 pmic=1 battery=1 buttons=1 ca_vbl=1 ddr=2 fb_hz=120 fb_threads=4 fbscale=2".split()
+    check("avalon: configured boot arguments match avalon.config + cliffs.config",
+          sorted(a) == sorted(AVALON_ARGS), "got %s\nwant %s" % (sorted(a), sorted(AVALON_ARGS)))
+    check("avalon: kernel.ver carries the SoC", "-cliffs-" in r.stdout, r.stdout)
+    check("avalon: the .config is in Linux's form",
+          "CONFIG_HAKIOS_S3910=y" in open(cfg).read() and "CONFIG_GPU=y" in open(cfg).read() and 'CONFIG_FIRMWARE="device"' in open(cfg).read())
+    check("avalon: check passes", run("check", "--config", cfg).returncode == 0)
 
     r = run("needs", "--config", cfg)
-    check("redwood: needs says which firmware, and that it is missing here (none is pulled in a clean checkout)",
-          "fw-gpu/" in r.stdout and "fw-modem/" in r.stdout, r.stdout)
+    check("avalon: needs says which firmware, and that it is missing here (none is pulled in a clean checkout)",
+          "fw-haptic/" in r.stdout, r.stdout)
 
-    # the open profile over redwood
+    # the open profile over avalon
     o = os.path.join(work, "open")
-    r = run("defconfig", "redwood", "open", "-o", o)
-    check("redwood + open: passes", r.returncode == 0, r.stdout + r.stderr)
-    check("redwood + open: nothing of the phone's own is loaded",
-          sorted(args_of(run("args", "--config", o))) == sorted(("cpus=4 bootcpu=7 cpufreq=1 ufs=2 touchscreen=1 socinfo=1 thermal=1".split() + PANEL)),
+    r = run("defconfig", "avalon", "open", "-o", o)
+    check("avalon + open: passes", r.returncode == 0, r.stdout + r.stderr)
+    AVALON_OPEN = "cpus=8 bootcpu=7 cpufreq=1 ufs=2 touchscreen=1 bt=1 socinfo=1 thermal=1 thermal_stop=95 pmic=1 battery=1 buttons=1 ca_vbl=1 ddr=2 fb_hz=120 fb_threads=4 fbscale=2".split()
+    check("avalon + open: nothing of the phone's own is loaded",
+          sorted(args_of(run("args", "--config", o))) == sorted(AVALON_OPEN),
           run("args", "--config", o).stdout)
     r = run("needs", "--config", o)
-    check("redwood + open: needs nothing", r.returncode == 0 and "nothing of the phone's own" in r.stdout, r.stdout)
+    check("avalon + open: needs nothing", r.returncode == 0 and "nothing of the phone's own" in r.stdout, r.stdout)
 
     # fragments
     p = os.path.join(work, "persist")
     shutil.copyfile(cfg, p)
     r = run("merge", "persist", "--config", p)
     check("merge persist: ufs_write and var_store appear", r.returncode == 0 and {"ufs_write=1", "var_store=1"} <= set(args_of(run("args", "--config", p))), r.stdout + r.stderr)
-    check("merge persist: UFS stays 2, not duplicated", args_of(run("args", "--config", p)).count("ufs=2") == 1)
-    v = os.path.join(work, "virt")
-    run("defconfig", "defconfig", "virt", "-o", v)
-    check("defconfig + virt: virtio_net, one core, no firmware", sorted(args_of(run("args", "--config", v))) == ["cpus=1", "virtio_net=1"],
-          run("args", "--config", v).stdout)
+    check("merge persist: UFS becomes 2, not duplicated", args_of(run("args", "--config", p)).count("ufs=2") == 1)
     d = os.path.join(work, "base")
     run("defconfig", "defconfig", "-o", d)
     check("defconfig alone is the open one: cpus=1", args_of(run("args", "--config", d)) == ["cpus=1"], run("args", "--config", d).stdout)
     t = os.path.join(work, "trace")
-    run("defconfig", "redwood", "trace", "-o", t)
+    run("defconfig", "avalon", "trace", "-o", t)
     check("trace: net_trace=20", "net_trace=20" in args_of(run("args", "--config", t)))
 
-    # the arguments straight from a defconfig, with no .config made (what `make qemu-open` asks for)
+    # the arguments straight from a defconfig, with no .config made
     check("args --defconfig defconfig: cpus=1", args_of(run("args", "--defconfig", "defconfig")) == ["cpus=1"], run("args", "--defconfig", "defconfig").stdout)
-    check("args --defconfig redwood --fragment open: the open phone",
-          sorted(args_of(run("args", "--defconfig", "redwood", "--fragment", "open"))) == sorted(("cpus=4 bootcpu=7 cpufreq=1 ufs=2 touchscreen=1 socinfo=1 thermal=1".split() + PANEL)))
-    check("args --defconfig redwood: the same as the .config's", sorted(args_of(run("args", "--defconfig", "redwood"))) == sorted(a))
+    check("args --defconfig avalon --fragment open: the open phone",
+          sorted(args_of(run("args", "--defconfig", "avalon", "--fragment", "open"))) == sorted(AVALON_OPEN))
+    check("args --defconfig avalon: the same as the .config's", sorted(args_of(run("args", "--defconfig", "avalon"))) == sorted(a))
 
-    # the order of the arguments is the table's: cpus first, as in the README's lines
-    check("the arguments come in the order of the symbol table", args_of(run("args", "--config", cfg))[:3] == ["cpus=4", "bootcpu=7", "cpufreq=1"])
-
+    # the order of the arguments is the table's: cpus first
+    check("the arguments come in the order of the symbol table", args_of(run("args", "--config", cfg))[:3] == ["cpus=8", "bootcpu=7", "cpufreq=1"])
     # savedefconfig round trip: the minimal defconfig, made a defconfig of its own, gives the same arguments
     sd = run("savedefconfig", "--config", cfg)
-    check("savedefconfig: drops what defconfig already has", "CONFIG_FIRMWARE=\"none\"" not in sd.stdout and "CONFIG_GPU=y" in sd.stdout, sd.stdout)
+    check("savedefconfig: drops what defconfig already has", "CONFIG_FIRMWARE=\"none\"" not in sd.stdout and "CONFIG_TOUCHSCREEN=y" in sd.stdout and "CONFIG_CPUS=8" in sd.stdout, sd.stdout)
     fake = os.path.join(work, "root")
     shutil.copytree(os.path.join(ROOT, "configs"), os.path.join(fake, "configs"))
     open(os.path.join(fake, "configs", "mine_defconfig"), "w").write(sd.stdout)
@@ -143,11 +128,11 @@ try:
     refusal("cpus out of range", "CONFIG_CPUS=9\n", "CONFIG_CPUS is 1 to 8")
     refusal("a hex that is not hex", "CONFIG_UFS=2\nCONFIG_MODEM=y\nCONFIG_MODEM_BUFFER=a8000000\n", "starts with 0x")
     refusal("a bool that is not y", "CONFIG_GPU=1\n", "is a bool: y, or not set")
-    refusal("a string without quotes", "CONFIG_DEVICE=redwood\n", "string in quotes")
+    refusal("a string without quotes", "CONFIG_DEVICE=avalon\n", "string in quotes")
     refusal("a FIRMWARE that is neither", 'CONFIG_FIRMWARE="maybe"\n', '"device" or "none"')
 
     r = run("defconfig", "nosuchphone", "-o", os.path.join(work, "x"))
-    check("an unknown defconfig lists what there is", r.returncode != 0 and "redwood_defconfig" in (r.stdout + r.stderr), r.stdout + r.stderr)
+    check("an unknown defconfig lists what there is", r.returncode != 0 and "avalon_defconfig" in (r.stdout + r.stderr), r.stdout + r.stderr)
     r = run("args", "--config", os.path.join(work, "nothing"))
     check("no .config: says how to make one", r.returncode != 0 and "defconfig NAME" in (r.stdout + r.stderr), r.stdout + r.stderr)
 
@@ -200,9 +185,9 @@ try:
               f.read().replace("\r\n", "\n") == listed, "run: tools/hakios-config.py listing common -o configs/common_defconfig")
     check("the listing has hundreds of symbols, each with a comment above it",
           listed.count("\nCONFIG_") + listed.count("\n# CONFIG_") >= 300 and listed.count("\n# ") > 600, listed.count("\n"))
-    with open(os.path.join(ROOT, "devices", "redwood", "configs", "redwood_defconfig"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "devices", "avalon", "configs", "avalon_defconfig"), encoding="utf-8") as f:
         includes = [l.split()[1] for l in f if l.startswith("#include ")]
-    check("redwood_defconfig is the common one, the SoC's and the phone's, put together", includes == ["common_defconfig", "sc7280.config", "redwood.config"], includes)
+    check("avalon_defconfig is the common one, the SoC's and the phone's, put together", includes == ["common_defconfig", "cliffs.config", "avalon.config"], includes)
     check("the common configuration does not say which phone: no device, no SoC",
           not any(l.startswith(("CONFIG_DEVICE=", "CONFIG_SOC=")) for l in listed.splitlines()))
     # #include: a fragment can put others first; a loop is an error, not a hang
@@ -234,20 +219,20 @@ try:
           len(hc.SYMBOLS) >= 300 and len({s[0] for s in hc.SYMBOLS}) == len(hc.SYMBOLS), len(hc.SYMBOLS))
 
     # the drivers: compiled in, not arguments
-    check("redwood builds every driver, and they give no argument",
-          all("CONFIG_%s=y" % d.symbol in open(cfg).read() for d in hc.DRIVERS) and len(hc.DRIVERS) >= 20 and
+    check("avalon builds its configured drivers, and they give no argument",
+          "CONFIG_HAKIOS_S3910=y" in open(cfg).read() and "CONFIG_HAKIOS_GOODIX" in open(cfg).read() and len(hc.DRIVERS) >= 20 and
           not any(x.startswith("hakios_") for x in args_of(run("args", "--config", cfg))), len(hc.DRIVERS))
     built = hc.drivers_built({})
     check("a configuration that names no driver builds them all (their default)", all(built.values()), built)
     off = dict(hc.parse(cfg)[0])
-    problems, _ = hc.check(dict(off, HAKIOS_ADSP="n"))
+    problems, _ = hc.check(dict(off, HAKIOS_SOUND="y", HAKIOS_ADSP="n"))
     check("a driver without one it requires is refused (SOUND without ADSP)", any("CONFIG_HAKIOS_SOUND requires CONFIG_HAKIOS_ADSP" in p for p in problems), problems)
     problems, _ = hc.check(dict(off, HAKIOS_GOODIX="n"))
-    check("an argument another built driver still reads is fine (touchscreen= is the buttons' too)", not problems, problems)
-    problems, _ = hc.check(dict(off, HAKIOS_GOODIX="n", HAKIOS_BUTTONS="n"))
-    check("an argument only left-out drivers read is refused (touchscreen= without GOODIX and BUTTONS)",
-          any("CONFIG_TOUCHSCREEN gives touchscreen=" in p and "CONFIG_HAKIOS_GOODIX" in p and "CONFIG_HAKIOS_BUTTONS" in p for p in problems), problems)
-    problems, _ = hc.check(dict(off, HAKIOS_GOODIX="n", HAKIOS_BUTTONS="n", TOUCHSCREEN="n"))
+    check("an argument another built driver still reads is fine (touchscreen= is S3910's and buttons' too)", not problems, problems)
+    problems, _ = hc.check(dict(off, HAKIOS_GOODIX="n", HAKIOS_S3910="n", HAKIOS_BUTTONS="n"))
+    check("an argument only left-out drivers read is refused (touchscreen= without GOODIX, S3910, and BUTTONS)",
+          any("CONFIG_TOUCHSCREEN gives touchscreen=" in p and "CONFIG_HAKIOS_GOODIX" in p and "CONFIG_HAKIOS_S3910" in p and "CONFIG_HAKIOS_BUTTONS" in p for p in problems), problems)
+    problems, _ = hc.check(dict(off, HAKIOS_GOODIX="n", HAKIOS_S3910="n", HAKIOS_BUTTONS="n", TOUCHSCREEN="n", BUTTONS="n"))
     check("... and with that argument gone too, the choice passes", not [p for p in problems if "GOODIX" in p or "touchscreen" in p], problems)
     problems, _ = hc.check(dict(off, HAKIOS_GOODIX="maybe"))
     check("a driver is y or not set", any("CONFIG_HAKIOS_GOODIX is a driver" in p for p in problems), problems)
@@ -293,7 +278,7 @@ try:
     bad = os.path.join(work, "badchoice")
     shutil.copyfile(nog, bad)
     with open(bad, "a") as f:
-        f.write("# CONFIG_HAKIOS_ADSP is not set\n")
+        f.write("CONFIG_HAKIOS_SOUND=y\n# CONFIG_HAKIOS_ADSP is not set\n")
     r = run("kernel", "--tree", tree, "--config", bad)
     check("kernel: refuses a choice a driver's requires breaks", r.returncode != 0 and "requires CONFIG_HAKIOS_ADSP" in r.stdout, r.stdout + r.stderr)
 
@@ -305,7 +290,7 @@ try:
     r = run("help", "gpuu")
     check("help on an unknown symbol suggests", r.returncode != 0 and "did you mean CONFIG_GPU" in r.stdout, r.stdout)
     r = run("list")
-    check("list: defconfigs and fragments", all(x in r.stdout for x in ("redwood", "open", "virt", "persist", "trace")), r.stdout)
+    check("list: defconfigs and fragments", all(x in r.stdout for x in ("avalon", "open", "persist", "trace")), r.stdout)
 finally:
     shutil.rmtree(work, ignore_errors=True)
 

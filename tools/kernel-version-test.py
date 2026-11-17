@@ -67,16 +67,16 @@ try:
     git(repo, "checkout", "--", "tracked.txt")
     check("restored: clean again", "-dirty" not in run(repo).stdout)
 
-    open(os.path.join(repo, ".config"), "w").write('# a configuration\nCONFIG_SOC="sc7280"\nCONFIG_CPUS=8\n')
+    open(os.path.join(repo, ".config"), "w").write('# a configuration\nCONFIG_SOC="cliffs"\nCONFIG_CPUS=8\n')
     check("CONFIG_SOC of .config goes between the Darwin and the commit",
-          re.fullmatch(r"\d+\.\d+\.\d+-hakios-darwin22\.5-sc7280-g[0-9a-f]{8}", run(repo).stdout.strip()) is not None, run(repo).stdout)
+          re.fullmatch(r"\d+\.\d+\.\d+-hakios-darwin22\.5-cliffs-g[0-9a-f]{8}", run(repo).stdout.strip()) is not None, run(repo).stdout)
     other = os.path.join(work, "other.config")
     open(other, "w").write('CONFIG_SOC="sm8550"\n')
     check("--config names another configuration", "-sm8550-" in run(repo, "--config", other).stdout, run(repo, "--config", other).stdout)
 
     check("HAKIOS_VERSION_SUFFIX replaces the git part",
-          run(repo, env={"HAKIOS_VERSION_SUFFIX": "-gdeadbeef"}).stdout.strip().endswith("-sc7280-gdeadbeef"))
-    check("an empty HAKIOS_VERSION_SUFFIX means no git part", run(repo, env={"HAKIOS_VERSION_SUFFIX": ""}).stdout.strip().endswith("-sc7280"))
+          run(repo, env={"HAKIOS_VERSION_SUFFIX": "-gdeadbeef"}).stdout.strip().endswith("-cliffs-gdeadbeef"))
+    check("an empty HAKIOS_VERSION_SUFFIX means no git part", run(repo, env={"HAKIOS_VERSION_SUFFIX": ""}).stdout.strip().endswith("-cliffs"))
 
     # not a git tree
     plain = os.path.join(work, "plain")

@@ -12,12 +12,10 @@ Every `make` target is a script below it; run the script itself for its options 
 | `make images` | `userland/root.apfs` and `userland/system.apfs` |
 | `make kernel` | the kernel from source, with the `.config`'s drivers |
 | `make loader` / `make loader-open` | the boot loader with your IPSW's identity / the placeholder that boots the open kernel only |
-| `make qemu` / `make qemu-open` | a session in QEMU with Darwin / the open kernel with nothing of Apple's |
 | `make phone` | a session on the phone with the `.config`'s arguments |
 | `make firmware` | the phone's firmware off the phone (`devices/$(DEVICE)/pull-firmware.sh`) |
 | `make esp` | an EFI system partition tree for a UEFI-native boot ([UEFI boot](../uefi-boot.md)) |
 | `make u-boot` / `make u-boot-img` | HakiOS's U-Boot for `$(DEVICE)` / it as a boot image for `fastboot boot` that starts the loader from RAM ([U-Boot](../u-boot.md)) |
-| `make qemu-u-boot` | `make qemu-open`'s payload booted the phone's way: U-Boot, the hakios command, `bootefi` ([U-Boot](../u-boot.md)) |
 | `make prebuilt` | refresh `prebuilt/` from what was built |
 | `make clean` | the build output of the kernel, loader and images |
 | `make NAME_defconfig` | `.config` from a defconfig of any repository (`FRAGMENTS="open trace"` on top) |

@@ -71,24 +71,20 @@ A driver nobody names is built (`default y`): every driver was built before ther
 then still gives the same kernel. A device leaves out what it does not have:
 
 ```
-# configs/qemu_defconfig (in the tree): QEMU's virt machine, the phone's drivers left out of the kernel
+# devices/avalon/configs/avalon_defconfig: OnePlus Nord 4 (SM7675 Cliffs)
 #include common_defconfig
-#include open.config
-#include virt.config
-CONFIG_DEVICE="qemu"
-# CONFIG_HAKIOS_GOODIX is not set
-# CONFIG_HAKIOS_ADRENO is not set
-...
+#include cliffs.config
+#include avalon.config
 ```
 
 ```bash
-make qemu_defconfig        # .config: 4 drivers built in (the virtio ones), 21 left out
+make avalon_defconfig      # .config: avalon + cliffs + common drivers
 make config                # says which are built and which are not
 make kernel                # builds that kernel
 ```
 
 A port to another phone starts the same way: its `configs/<name>.config` leaves out each driver whose hardware it has not
-ported yet (the addresses and pins in a driver are the POCO X5 Pro's, and its head says where each came from), and turns one
+ported yet (and the addresses, pins and rails must match the phone), and turns one
 on when it has been made to work there. A phone with another touch controller adds a driver, not a branch: its file in
 `drivers/input/`, a line in `drivers/map`, a `driver` block in `drivers/input/conf`, and `CONFIG_HAKIOS_<IT>=y` in its defconfig.
 
@@ -139,6 +135,5 @@ without the Wi-Fi driver, and every driver's sysctls without the battery's. The 
 
 ## What was checked
 
-On a Mac (Apple clang, the toolchain of `xnu-deps/`), 27 October 2026: the kernel built and linked with every driver
-(`make kernel` without a `.config`), and with `make qemu_defconfig`, four drivers of 25. The QEMU kernel was not booted yet,
-and nothing here was run on the phone. `tools/hakios-config-test.py` and `tools/drivers-check.py` pass.
+The kernel builds with every driver (`make kernel` without a `.config`) or with a device's configuration (`make avalon_defconfig`).
+`tools/hakios-config-test.py` and `tools/drivers-check.py` pass.

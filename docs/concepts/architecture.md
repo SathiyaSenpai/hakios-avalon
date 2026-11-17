@@ -25,9 +25,9 @@ yours (the user space you lay out).
 ## How a configuration becomes a kernel and a command line
 
 ```
- configs/common_defconfig                 (common)
- devices/redwood/soc/configs/sc7280.config  (SoC)      make redwood_defconfig
- devices/redwood/configs/redwood.config      (device)   ------------------------->  .config
+ configs/common_defconfig                       (common)
+ devices/avalon/soc/configs/cliffs.config       (SoC)      make avalon_defconfig
+ devices/avalon/configs/avalon.config           (device)   ------------------------->  .config
                                                                                     |
                CONFIG_HAKIOS_*  ->  tools/hakios-config.py kernel  ->  XNU's options (config/MASTER.hakios, conf/files)  ->  make kernel
                every other CONFIG_*  ->  tools/hakios-config.py args  ->  the kernel's boot-arguments  ->  make phone, ./xl run
@@ -46,8 +46,8 @@ device's. A device's defconfig is three lines: the common kernel, its SoC's frag
 | Layer | Has | Example |
 |---|---|---|
 | common | the kernel port, every driver, the loader, user space, the tools, the documentation | this repository |
-| SoC | the SoC's facts (cores, addresses that are the family's), its drivers; carried by each device that has the SoC | `devices/redwood/soc` |
-| device | its defconfig, its status, its UEFI platform, its firmware script, drivers of its own | `devices/redwood` |
+| SoC | the SoC's facts (cores, addresses that are the family's), its drivers; carried by each device that has the SoC | `devices/avalon/soc` |
+| device | its defconfig, its status, its U-Boot config, its firmware script, drivers of its own | `devices/avalon` |
 | UEFI | Mu-Silicium with HakiOS's boot path, banner and name | `uefi` ([its README](https://github.com/oosexgang/hakios-uefi/blob/main/README.md)) |
 
 ## What is written to the phone
@@ -72,5 +72,4 @@ device's. A device's defconfig is three lines: the common kernel, its SoC's frag
 | `devices/` | the device repositories (each with its SoC's layer in `soc/`), and `devices/manifest.conf` |
 | `sysimage/` | scripts that fetch and unpack the OS files from the IPSW (none of the files) |
 | `tools/` | configuration, devices, checks, APFS, firmware, QMI, the run scripts |
-| `qemu/` | running in QEMU |
 | `prebuilt/` | the kernel, loader and libraries built from this source |

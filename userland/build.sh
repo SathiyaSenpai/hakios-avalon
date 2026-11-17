@@ -84,6 +84,10 @@ set -e
 # a copy of a tree that shares its files' data: hard links (Linux), clones of the files (macOS's APFS, whose cp has no -l)
 linkcopy() { if [ "$(uname)" = Darwin ]; then cp -cRp "$1" "$2"; else cp -al "$1" "$2"; fi; }
 cd "$(dirname "$(readlink -f "$0")")"
+echo "=========================================================="
+echo " HakiOS APFS Builder: Port for OnePlus Nord 4 (avalon)"
+echo " Maintainer / Port by: sathiyasenpai"
+echo "=========================================================="
 source ../xnu-env.sh
 
 CC="xnu-clang -arch arm64 -Os -static -nostdlib -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra"
@@ -133,11 +137,11 @@ SILEO_BIN="chmod cp mkdir mv rm"
 # (libhakios.tweaks is the tweak loader of the package manager's prefix, src/inject_tweaks.c: in
 # SpringBoard the library above opens it, here it is named for the programs that have no library of
 # ours -- Settings, where a tweak's own pane belongs. Add a program's name to have tweaks in it.)
-INJECT=${INJECT-"/redwood/lib/libhakios.dylib backboardd containermanagerd containermanagerd_system
-/redwood/lib/libhakios.sb.dylib SpringBoard
-/redwood/lib/libhakios.media.dylib mediaserverd
-/redwood/lib/libhakios.app.dylib Sileo
-/redwood/lib/libhakios.tweaks.dylib Preferences"}
+INJECT=${INJECT-"/avalon/lib/libhakios.dylib backboardd containermanagerd containermanagerd_system
+/avalon/lib/libhakios.sb.dylib SpringBoard
+/avalon/lib/libhakios.media.dylib mediaserverd
+/avalon/lib/libhakios.app.dylib Sileo
+/avalon/lib/libhakios.tweaks.dylib Preferences"}
 mkdir -p obj
 
 if [ -z "$PREBUILT" ] && ! command -v ld64 >/dev/null; then PREBUILT=1; fi
@@ -238,18 +242,18 @@ if [ -d $DARWIN/rootfs/usr/lib ]; then
 			{ ${LDID:-ldid} -Ssrc/wifipw_test.entitlements obj/wifipw_test 2>/dev/null ||
 			  echo "build.sh: no ldid: wifipw_test is unsigned, and the keychain will refuse it (-34018)"; }
 		# our library for inside stock Darwin programs (the jobs in INJECT are started with it)
-		$DYN -dynamiclib -install_name /redwood/lib/libhakios.dylib -framework CoreFoundation -framework IOKit -lobjc \
+		$DYN -dynamiclib -install_name /avalon/lib/libhakios.dylib -framework CoreFoundation -framework IOKit -lobjc \
 			-o obj/libhakios.dylib src/inject.c
-		$DYN -dynamiclib -install_name /redwood/lib/libhakios.sb.dylib -framework CoreFoundation -framework CoreGraphics -framework IOKit -framework IOSurface -lobjc \
+		$DYN -dynamiclib -install_name /avalon/lib/libhakios.sb.dylib -framework CoreFoundation -framework CoreGraphics -framework IOKit -framework IOSurface -lobjc \
 			-o obj/libhakios.sb.dylib src/inject_sb.c
 		# ... the tweak loader of the package manager's prefix (src/inject_tweaks.c): it goes into a
 		# program either as the one library the kernel inserts or opened by a library of ours
-		$DYN -dynamiclib -install_name /redwood/lib/libhakios.tweaks.dylib -framework CoreFoundation -lobjc \
+		$DYN -dynamiclib -install_name /avalon/lib/libhakios.tweaks.dylib -framework CoreFoundation -lobjc -lMobileGestalt \
 			-o obj/libhakios.tweaks.dylib src/inject_tweaks.c
 		# ... and inside an application, to say what killed it (src/inject_app.c)
-		$DYN -dynamiclib -install_name /redwood/lib/libhakios.app.dylib -lobjc \
+		$DYN -dynamiclib -install_name /avalon/lib/libhakios.app.dylib -lobjc \
 			-o obj/libhakios.app.dylib src/inject_app.c
-		$DYN -O2 -dynamiclib -install_name /redwood/lib/libhakios.media.dylib -framework CoreFoundation -framework CoreMedia \
+		$DYN -O2 -dynamiclib -install_name /avalon/lib/libhakios.media.dylib -framework CoreFoundation -framework CoreMedia \
 			-framework CoreVideo -framework IOSurface -lobjc \
 			-o obj/libhakios.media.dylib src/inject_media.c src/camera_device.c src/camera_isp.c
 		# the output device of the audio server: a plug-in for CoreAudio's HAL
@@ -300,7 +304,7 @@ if [ -d $DARWIN/rootfs/usr/lib ]; then
 			# M2V=1: with UniXNU's Metal on Vulkan inside, the device boot-arg metal_m2v=1 gives the window server
 			M2V_OBJS=
 			if [ -n "${M2V:-}" ] && [ -f ../xnu-deps/build/m2v/out/frontend.o ]; then
-				M2V_OBJS="../xnu-deps/build/m2v/out/frontend.o ../xnu-deps/build/m2v/out/libadreno_metal_bridge.a -framework CoreFoundation -lc++ -Wl,-dead_strip"
+				M2V_OBJS="-DHAKIOS_METAL_M2V ../xnu-deps/build/m2v/out/frontend.o ../xnu-deps/build/m2v/out/libadreno_metal_bridge.a -framework CoreFoundation -lc++ -Wl,-dead_strip"
 				echo "build.sh: with UniXNU's Metal on Vulkan (metal_m2v=1)"
 			fi
 			$DYN -bundle -framework Foundation -framework IOKit -framework IOSurface -framework Metal -lobjc \
@@ -398,13 +402,11 @@ if [ -d $DARWIN/rootfs/usr/lib ]; then
 	fi
 	# a program is not started with a library that is not there: it would not start at all
 	echo "$INJECT" | while read -r library names; do
-		# a /redwood/lib library only if it was actually built; any other path (e.g. a tweak loader
+		# a /avalon/lib library only if it was actually built; any other path (e.g. a tweak loader
 		# in /var/jb) as it is, since it lives on the prefix and is there at run time
 		case "$library" in
 		"") ;;
-		# an "if" and not "&& echo": a last line whose library is absent would make the loop,
-		# and with it the pipeline and the whole build under set -e, fail -- which is what a tree
-		# with only prebuilt/userland in it does, since not every injection library is shipped there
+		/avalon/lib/*) if [ -f "root/lib/${library#/avalon/lib/}" ]; then echo "$library $names"; fi ;;
 		/redwood/lib/*) if [ -f "root/lib/${library#/redwood/lib/}" ]; then echo "$library $names"; fi ;;
 		*) echo "$library $names" ;;
 		esac
@@ -476,11 +478,17 @@ fi
 # ... and the image of the Wi-Fi DSP, from /vendor/firmware_mnt/image of the same Android into ../fw-wifi
 # (drivers/wifi/hakios.wifi.c; 7.6 MB), with what the radio's firmware is sent once it runs: this phone's
 # board data and the regulatory database (image/qca6750 there; 60 and 24 KB)
-if [ -f ../fw-wifi/wpss.mdt ]; then
+if [ -f ../fw-wifi/wpss.mdt ] || [ -f ../fw-wifi/qca6750/wpss.mdt ]; then
 	mkdir -p root/fw
-	install -m 0644 ../fw-wifi/wpss.mdt ../fw-wifi/wpss.b0[2-9] root/fw/
-	for f in bd_m20gl.elf regdb_xiaomi.bin; do
-		[ -f ../fw-wifi/qca6750/$f ] && install -m 0644 ../fw-wifi/qca6750/$f root/fw/
+	for f in ../fw-wifi/wpss.mdt ../fw-wifi/wpss.b[0-9][0-9] ../fw-wifi/qca6750/wpss.mdt ../fw-wifi/qca6750/wpss.b[0-9][0-9]; do
+		[ -f "$f" ] && install -m 0644 "$f" root/fw/
+	done
+	for f in bdwlan.elf regdb.bin bd_m20gl.elf regdb_xiaomi.bin; do
+		if [ -f ../fw-wifi/$f ]; then
+			install -m 0644 ../fw-wifi/$f root/fw/
+		elif [ -f ../fw-wifi/qca6750/$f ]; then
+			install -m 0644 ../fw-wifi/qca6750/$f root/fw/
+		fi
 	done
 	# the network the radio is to join: its name on the first line, its passphrase on the second. Yours, and
 	# so not in the repository; it goes where the firmware goes and the kernel reads it there (wifi_join=1)
@@ -493,6 +501,10 @@ fi
 if [ -f ../fw-haptic/aw8697_haptic.bin ]; then
 	mkdir -p root/fw
 	install -m 0644 ../fw-haptic/aw8697_haptic.bin root/fw/
+fi
+if [ -d ../fw-bt ]; then
+	mkdir -p root/fw
+	for f in ../fw-bt/*; do [ -f "$f" ] && install -m 0644 "$f" root/fw/; done
 fi
 # ... and the cameras' register tables (drivers/camera/hakios.camera.c, cam=2 and up), made by tools/camsensor.py out of
 # the sensors' module files of Android's camera stack, the phone's /vendor/lib64/camera/com.qti.sensormodule.
@@ -525,7 +537,7 @@ fi
 # git worktree add has none of it, and neither has one whose tools/new-workspace.sh predates the fw-*
 # loop there. Say what went in and what was not there to go in; what each one is for is above.
 fwhave= fwnone=
-for d in gpu wifi haptic camera audio; do
+for d in gpu wifi haptic camera audio bt; do
 	if [ -d ../fw-$d ]; then fwhave="$fwhave $d"; else fwnone="$fwnone $d"; fi
 done
 echo "build.sh: fw/: $(ls -1 root/fw 2>/dev/null | wc -l) files from ../fw-*:${fwhave:- none present}${fwnone:+, absent:$fwnone}"
@@ -549,7 +561,12 @@ mkdir -p root/empty root/xpc root/hal
 for f in extensions.plist extensions.plist.sig; do
 	[ -f $DARWIN/rootfs/System/Library/xpc/$f ] && cp $DARWIN/rootfs/System/Library/xpc/$f root/xpc/
 done
-[ -d root/lib/HakiosAudio.driver ] && ln -s /redwood/lib/HakiosAudio.driver root/hal/HakiosAudio.driver
+[ -d root/lib/HakiosAudio.driver ] && ln -sfn /avalon/lib/HakiosAudio.driver root/hal/HakiosAudio.driver
+[ -f root/sbin/init ] && ln -sf init root/sbin/launchd
+ln -sfn . root/avalon
+ln -sfn avalon root/redwood
+ln -sfn private/var/tmp root/tmp
+
 # Programs and libraries of more than 4 MB (Turnip, UniXNU's Metal on Vulkan: TURNIP=1, M2V=1) live in the system
 # image, in /usr/local/redwood, with a link in their place here: the small image is loaded with the kernel, in the
 # 64 MB the loader takes for both (with them it grew from 6.6 to 26 MB).
@@ -563,8 +580,8 @@ done
 [ -d big ] && SYSTEM=1          # (the links point into it: it is made again with them)
 # the image: zlib where it saves room (a small file whole in its attribute, as Apple keeps them); fw/
 # as it is, which the kernel's drivers use where it lies in memory (drivers/storage/hakios.image.c)
-python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs redwood=root | tail -1
-[ -z "$CHECK" ] || ../tools/apfs/check-image.sh root.apfs redwood=root
+python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs avalon=root | tail -1
+[ -z "$CHECK" ] || ../tools/apfs/check-image.sh root.apfs avalon=root
 
 # --- the RAM part of a boot off the flash: FLASHBOOT=1 -> flashboot.apfs --------------------------------
 # With the Darwin volume on the phone's flash as the root, all that has to come from RAM is what is not
@@ -605,7 +622,7 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
 	# from the Darwin volume's /fw, which src/init.c (flash_root) binds to this
 	if [ -f ../fw-audio/adsp.mdt ]; then
 		mkdir -p flashboot/fw
-		cp ../fw-audio/adsp.mdt ../fw-audio/adsp.b0[2-9] ../fw-audio/adsp.b[1-9][0-9] flashboot/fw/
+		cp ../fw-audio/adsp.mdt ../fw-audio/adsp.b[0-9][0-9] flashboot/fw/
 	fi
 	if [ -f ../fw-audio/aw882xx_acf.bin ]; then
 		mkdir -p flashboot/fw
@@ -659,8 +676,9 @@ if [ -f $DARWIN/system.manifest ] && [ -f $CACHE/dyld_shared_cache_arm64 ] &&
 	# launchd must load our choice of jobs, not all 500 that Darwin has
 	rm -rf sysroot/System/Library/LaunchDaemons sysroot/System/Library/NanoLaunchDaemons \
 		sysroot/System/Library/LaunchAngels sysroot/System/Library/xpc/launchd.plist
-	ln -s /redwood/LaunchDaemons sysroot/System/Library/LaunchDaemons
-	mkdir -p sysroot/redwood sysroot/sbin
+	ln -s /avalon/LaunchDaemons sysroot/System/Library/LaunchDaemons
+	mkdir -p sysroot/avalon sysroot/sbin
+	ln -sfn avalon sysroot/redwood
 	# where the kernel mounts the Darwin root container off the phone's flash (boot-arg apfs_volume=):
 	# Darwin has no /System/Volumes, and nothing can make a directory in this image once it is built
 	mkdir -p sysroot/System/Volumes/Darwin
@@ -679,17 +697,18 @@ if [ -f $DARWIN/system.manifest ] && [ -f $CACHE/dyld_shared_cache_arm64 ] &&
 	# it once the root is mounted (drivers/audio/hakios.adsp.c, adsp=1): 20 MB that do not fit beside GL=1 in the small image
 	if [ -f ../fw-audio/adsp.mdt ]; then
 		mkdir -p sysroot/fw
-		cp ../fw-audio/adsp.mdt ../fw-audio/adsp.b0[2-9] ../fw-audio/adsp.b[1-9][0-9] sysroot/fw/
+		cp ../fw-audio/adsp.mdt ../fw-audio/adsp.b[0-9][0-9] sysroot/fw/
 	fi
 	# MPSS firmware is much too large for the small boot image. Keep it in the system APFS,
 	# only when explicitly requested, after checking every loadable segment against this DTB.
 	# This stages the files; a separate XNU MPSS driver is still required to start the modem.
 	if [ -n "$MODEM" ]; then
 		[ -f ../fw-modem/modem.mdt ] || { echo "build.sh: MODEM=1 needs ../fw-modem/modem.mdt" >&2; exit 1; }
-		../devices/redwood/tools/modem_firmware.py --dtb ../devices/redwood/prebuilt/device-tree.dtb --firmware-dir ../fw-modem \
-			--node /soc/qcom,mss@4080000 >/dev/null
 		mkdir -p sysroot/fw
 		cp ../fw-modem/modem.mdt ../fw-modem/modem.b[0-9][0-9] sysroot/fw/
+		for extra in ../fw-modem/ipa_fws.* ../fw-modem/modem_dtb.*; do
+			[ -f "$extra" ] && cp "$extra" sysroot/fw/
+		done
 		# ... and the firmware partition's image/ (its mcfg configurations and the registry's *.jsn, pulled from
 		# the phone's /vendor/firmware_mnt/image into ../fw-modem/image), which the modem reads over TFTP (hakios.mpss.c)
 		if [ -d ../fw-modem/image ]; then
@@ -724,12 +743,12 @@ if [ -f $DARWIN/system.manifest ] && [ -f $CACHE/dyld_shared_cache_arm64 ] &&
 	fi
 	# our audio device, where the audio server looks for such plug-ins (and for no others: Apple's are left out)
 	mkdir -p sysroot/System/Library/Audio/Plug-Ins/HAL
-	ln -s /redwood/lib/HakiosAudio.driver sysroot/System/Library/Audio/Plug-Ins/HAL/HakiosAudio.driver
+	ln -sfn /avalon/lib/HakiosAudio.driver sysroot/System/Library/Audio/Plug-Ins/HAL/HakiosAudio.driver
 	# the plug-in Metal opens when the accelerator names it (boot-arg metal=1; without it nothing names this bundle)
 	rm -rf sysroot/usr/local/redwood
 	[ -d big ] && mkdir -p sysroot/usr/local && cp -a big sysroot/usr/local/redwood
 	mkdir -p sysroot/System/Library/Extensions
-	[ -d root/lib/HakiosMetal.bundle ] && ln -sfn /redwood/lib/HakiosMetal.bundle sysroot/System/Library/Extensions/HakiosMetal.bundle
+	[ -d root/lib/HakiosMetal.bundle ] && ln -sfn /avalon/lib/HakiosMetal.bundle sysroot/System/Library/Extensions/HakiosMetal.bundle
 	# the OS cryptex: on a device a separate volume grafted at /System/Cryptexes/OS. It holds the dyld
 	# shared cache (dyld looks there first) and a few libraries and resources outside the cache.
 	mkdir -p sysroot/System/Cryptexes
@@ -747,6 +766,7 @@ if [ -f $DARWIN/system.manifest ] && [ -f $CACHE/dyld_shared_cache_arm64 ] &&
 	# zlib where it saves room, as Apple keeps the root (a small file whole in its attribute): 5.4 GB of
 	# files in 2.5 GB, what fits into the phone's RAM beside Darwin
 	python3 ../tools/apfs/mkapfs.py -z -o system.apfs System=sysroot,manifest=$DARWIN/system.manifest | tail -1
+	echo "build.sh: [sathiyasenpai] system.apfs successfully created for OnePlus Nord 4 (avalon)"
 	[ -z "$CHECK" ] || ../tools/apfs/check-image.sh system.apfs System=sysroot,manifest=$DARWIN/system.manifest
 	rm -rf sysroot
 fi

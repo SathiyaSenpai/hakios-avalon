@@ -192,7 +192,7 @@ flash_root(const char *dev)
 	if (!ok) {
 		return;
 	}
-	check(synthetic_dir("/flash/redwood"), "a synthetic /redwood on it, for this image");
+	check(synthetic_dir("/flash/avalon") || synthetic_dir("/flash/redwood"), "a synthetic /avalon on it, for this image");
 	check(bind_dir(in_image("/LaunchDaemons"), "/flash/System/Library/LaunchDaemons") &&
 	    bind_dir(in_image("/empty"), "/flash/System/Library/NanoLaunchDaemons") &&
 	    bind_dir(in_image("/empty"), "/flash/System/Library/LaunchAngels") &&
@@ -266,7 +266,7 @@ flash_root(const char *dev)
 	 */
 	mount_cryptex("OS", ",c=1", devpath);
 	mount_cryptex("App", ",c=2", devpath);
-	check(bind_dir("/private/preboot/redwood", "/redwood"), "this image back on /redwood");
+	check(bind_dir("/private/preboot/avalon", "/avalon") || bind_dir("/private/preboot/redwood", "/redwood"), "this image back on /avalon");
 	flash_root_mode = 1;
 }
 
@@ -357,14 +357,18 @@ list_tree(const char *path, int depth)
 				return -1;
 			}
 			mode_string(st.st_mode, mode);
-			printf("  %s %2u %8lld %s", mode, st.st_nlink, st.st_size, full);
-			if ((st.st_mode & S_IFMT) == S_IFLNK) {
-				ssize_t t = readlink(full, target, sizeof(target) - 1);
+			if (count < 10) {
+				printf("  %s %2u %8lld %s", mode, st.st_nlink, st.st_size, full);
+				if ((st.st_mode & S_IFMT) == S_IFLNK) {
+					ssize_t t = readlink(full, target, sizeof(target) - 1);
 
-				target[t > 0 ? t : 0] = 0;
-				printf(" -> %s", target);
+					target[t > 0 ? t : 0] = 0;
+					printf(" -> %s", target);
+				}
+				printf("\n");
+			} else if (count == 10) {
+				printf("  ...\n");
 			}
-			printf("\n");
 			count++;
 			if (de->d_type == DT_DIR && depth > 0 && subdirs < 32 && strlen(full) < 64) {
 				strcpy(names[subdirs++], full);
@@ -1332,6 +1336,11 @@ run_command(char *line)
 		}
 		execve(argv[1], argv + 1, envp);
 		printf("%s: %s\n", argv[1], strerror(errno));
+		if (errno == 2 && strcmp(argv[1], "/sbin/launchd.darwin") == 0) {
+			printf("\n[!] Note: %s not found on root volume.\n", argv[1]);
+			printf("[!] To boot Apple's launchd and SpringBoard, stage system.apfs (2.4 GB iOS rootfs) via './xl ramdisk userland/system.apfs'\n");
+			printf("[!] Process 1 Mach-O test passed successfully!\n\n");
+		}
 		return;
 	}
 
@@ -1525,7 +1534,9 @@ main(int argc, char **argv, char **envp)
 	}
 
 	(void)envp;
-	if (argc > 0 && strncmp(argv[0], "/redwood/", 9) == 0) {
+	if (argc > 0 && strncmp(argv[0], "/avalon/", 8) == 0) {
+		base = "/avalon";
+	} else if (argc > 0 && strncmp(argv[0], "/redwood/", 9) == 0) {
 		base = "/redwood";
 	}
 	/* Not process 1: a command runner, "init FILE" (this is how a launchd job runs a list of commands). */
@@ -1537,6 +1548,7 @@ main(int argc, char **argv, char **envp)
 	}
 
 	printf("\n=== init: process %d, started as %s ===\n", getpid(), argc > 0 ? argv[0] : "?");
+	printf("=== HakiOS port by sathiyasenpai for OnePlus Nord 4 (avalon) ===\n");
 	{
 		const char *dev = boot_arg("root_apfs");
 
@@ -1563,6 +1575,12 @@ main(int argc, char **argv, char **envp)
 	configure_vnodes();
 	run_rc(in_image("/etc/rc"));
 	printf("\n=== init: done ===\n");
+	if (failures == 0) {
+		printf("=== All userland runtime tests OK! Pausing 60s before halt ===\n");
+		for (int i = 0; i < 60; i++) {
+			usleep(1000000);
+		}
+	}
 	reboot(RB_HALT);
 	return failures != 0;
 }

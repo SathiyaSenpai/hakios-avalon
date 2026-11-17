@@ -555,7 +555,7 @@ static void hm_fps_drew(double seconds, unsigned cpu);   /* metal_fps: our time 
 static void hm_fps_core(double seconds);   /* metal_fps: the core's time in a draw call */
 static BOOL hm_fps_on(void);                          /* metal_fps: command buffers timed pass by pass */
 #define HM_CACHE_DIR  "/private/var/db/hakios-metal-cache"     /* compiled stages, kept across boots by var_store */
-#define HM_CACHE_SEED "/redwood/share/hakios-metal-cache"     /* the same, baked into the image (read-only) */
+#define HM_CACHE_SEED (access("/avalon/share/hakios-metal-cache", F_OK) == 0 ? "/avalon/share/hakios-metal-cache" : "/redwood/share/hakios-metal-cache") /* baked into image */
 static BOOL hm_gmem_on(void);                         /* metal_gmem=1: tiled rendering where a pass allows it */
 - (void)hakiosShadowYCbCr:(IOSurfaceRef)surface format:(MTLPixelFormat)format;
 - (void)hakiosRefreshShadow;
@@ -1622,7 +1622,9 @@ hm_bitcode_for(id function, NSString *pipeline, BOOL vertex)
 
 			if (device == nil) device = MTLCreateSystemDefaultDevice();   /* (the function's own answered nil) */
 			NSError *e = nil;
-			id lib = [device newLibraryWithURL:[NSURL fileURLWithPath:@"/redwood/share/ca-share/QuartzCore-default.metallib"]
+			NSString *caLibPath = [[NSFileManager defaultManager] fileExistsAtPath:@"/avalon/share/ca-share/QuartzCore-default.metallib"]
+			    ? @"/avalon/share/ca-share/QuartzCore-default.metallib" : @"/redwood/share/ca-share/QuartzCore-default.metallib";
+			id lib = [device newLibraryWithURL:[NSURL fileURLWithPath:caLibPath]
 						     error:&e];
 			hm_print("inplace_copy for edr_scale: device %s, library %s%s\n", device ? "yes" : "nil", lib ? "opened" : "not opened: ",
 				 lib ? "" : [[e description] UTF8String]);
@@ -1685,6 +1687,7 @@ hm_bitcode_for(id function, NSString *pipeline, BOOL vertex)
 	return variant != nil ? variant : own;
 }
 
+#ifdef HAKIOS_METAL_M2V
 /* The same choice for UniXNU's Metal on Vulkan (metal_m2v=1), whose functions are its own objects: by the function's name,
  * its label and the pipeline's (native_bridge_metal_variant_hook, NativeBridgeMetalFrontend.mm: variantFunction()). */
 static const void *
@@ -1728,6 +1731,7 @@ hm_m2v_variant(const char *name, const char *label, const char *pipeline, int ve
 	*length = [variant length];
 	return [variant bytes];         /* (the dictionary keeps it for good) */
 }
+#endif
 
 static void
 hm_dump_function(const char *label, id function, const char *key, const hakios_metal_constant *constants, unsigned count)
@@ -2092,14 +2096,14 @@ ca_prof_start(void)
 	});
 }
 
+#ifdef HAKIOS_METAL_M2V
 /* UniXNU's Metal on Vulkan (NativeBridgeMetalFrontend.h), there when the bundle is linked with it (M2V=1) */
 extern id native_bridge_metal_open(const char *loader, const char *cache, uint64_t registryID,
-				   void (*missing)(const char *, const char *)) __attribute__((weak_import));
-extern uint64_t native_bridge_metal_first_problem(char *out, size_t size) __attribute__((weak_import));
-extern size_t native_bridge_metal_status(char *out, size_t size) __attribute__((weak_import));
-extern size_t native_bridge_metal_formats(char *out, size_t size) __attribute__((weak_import));
-extern const void *(*native_bridge_metal_variant_hook)(const char *, const char *, const char *, int, size_t *) __attribute__((weak_import));
-static const void *hm_m2v_variant(const char *name, const char *label, const char *pipeline, int vertex, size_t *length);
+				   void (*missing)(const char *, const char *));
+extern uint64_t native_bridge_metal_first_problem(char *out, size_t size);
+extern size_t native_bridge_metal_status(char *out, size_t size);
+extern size_t native_bridge_metal_formats(char *out, size_t size);
+extern const void *(*native_bridge_metal_variant_hook)(const char *, const char *, const char *, int, size_t *);
 
 static char hm_m2v_last_stderr[400];   /* the last line of Turnip's or the runtime's that said error, refused or warning */
 
@@ -2117,6 +2121,7 @@ hm_boot_arg_set(const char *what)
 
 	return sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0 && strstr(args, what) != NULL;
 }
+#endif
 
 - (instancetype)initWithAcceleratorPort:(io_service_t)port
 {
@@ -2137,9 +2142,10 @@ hm_boot_arg_set(const char *what)
 			return nil;     /* (not released: before -init, _MTLDevice's -dealloc reads what -init never set) */
 		}
 	}
+#ifdef HAKIOS_METAL_M2V
 	/* (hakios) metal_m2v=1: the device is UniXNU's Metal on Vulkan instead (AdrenoMetal's frontend over metal2vulkan
 	 * over Turnip, tools/mk-m2v.sh; linked in by userland/build.sh M2V=1): its own objects, from the device down */
-	if (native_bridge_metal_open != NULL && hm_boot_arg_set("metal_m2v=1")) {
+	if (hm_boot_arg_set("metal_m2v=1")) {
 		/* boot-arg tu_debug=FLAGS[,FLAGS]: Turnip's TU_DEBUG in the window server (sysmem, gmem, forcebin, ...) */
 		{
 			char args[1024] = "", value[64] = "";
@@ -2199,7 +2205,9 @@ hm_boot_arg_set(const char *what)
 			native_bridge_metal_variant_hook = hm_m2v_variant;
 		}
 		mkdir("/private/var/db/m2v", 0700);
-		id device = native_bridge_metal_open("/redwood/lib/libvulkan_freedreno.dylib",
+		const char *turnipPath = access("/avalon/lib/libvulkan_freedreno.dylib", R_OK) == 0
+		    ? "/avalon/lib/libvulkan_freedreno.dylib" : "/redwood/lib/libvulkan_freedreno.dylib";
+		id device = native_bridge_metal_open(turnipPath,
 		    access("/private/var/db/m2v", W_OK) == 0 ? "/private/var/db/m2v" : "/private/var/tmp/m2v", 0, hm_m2v_missing);
 		if (device != nil) {
 			hm_print("device: %s (metal2vulkan over Turnip, class %s)\n", [[device name] UTF8String],
@@ -2292,6 +2300,7 @@ hm_boot_arg_set(const char *what)
 		native_bridge_metal_first_problem(problem, sizeof(problem));
 		hm_print("no metal2vulkan device (%s): hakios-metal's instead\n", problem);
 	}
+#endif
 	hm_library_stand_ins();
 	ca_prof_start();
 	/* (hakios) the window server's compiled stages kept on disk (hakios-metal: compileStage's cache), so that a
@@ -2486,7 +2495,8 @@ hm_print_callers(const char *what)
 	/* QuartzCore's of this image (the iPhone X's) has no default.metallib beside it; the one made of its own functions
 	 * file (hakios: merge_metallib.py, the four uber shaders, one variant each -- hm_bitcode_for() picks the variant a
 	 * pipeline needs) stands in for it, from where the image puts it */
-	NSString *ours = @"/redwood/share/ca-share/QuartzCore-default.metallib";
+	NSString *ours = [fm fileExistsAtPath:@"/avalon/share/ca-share/QuartzCore-default.metallib"]
+	    ? @"/avalon/share/ca-share/QuartzCore-default.metallib" : @"/redwood/share/ca-share/QuartzCore-default.metallib";
 	NSString *beside = [frame stringByAppendingPathComponent:@"default.metallib"];
 	if ([path rangeOfString:@"QuartzCore.framework"].location != NSNotFound && ![fm fileExistsAtPath:beside] &&
 	    [fm fileExistsAtPath:ours]) {

@@ -5,10 +5,9 @@
 
 Every device with a repository, and how far each part of it works. A device of yours: [Port a device](../porting/index.md).
 
-| Device | SoC | display | touch | buttons | cpu | gpu | storage | audio | battery | haptic | camera | torch | wifi | bluetooth | cellular | network | thermal |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| [QEMU virt (aarch64)](qemu.md) | `none` | yes | yes | yes |  | no | yes | yes |  |  |  |  |  |  |  | yes |  |
-| [POCO X5 Pro 5G](redwood.md) | `sc7280` | yes | yes | yes | yes | yes | yes | yes | partly | yes | yes | partly | yes | no | partly |  | partly |
+| Device | SoC | display | touch | buttons | cpu | gpu | storage | audio | battery | haptic | wifi | cellular | thermal |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [OnePlus Nord 4](avalon.md) | `cliffs` | yes | yes | yes | yes | no | partly | no | partly | yes | no | no | yes |
 
 An empty cell is a part nobody has looked at on that device yet.
 
@@ -16,4 +15,4 @@ An empty cell is a part nobody has looked at on that device yet.
 
 | SoC | What | |
 |---|---|---|
-| `sc7280` | Qualcomm SC7280 family (SM7325 "Snapdragon 778G", QCM6490; "yupik", "kodiak") | carried by redwood (`devices/redwood/soc/`) |
+| `cliffs` | Qualcomm SM7675 Cliffs | carried by avalon (`devices/avalon/soc/`) |

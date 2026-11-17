@@ -2,13 +2,13 @@
 
 Made by `tools/boot-args.py --markdown`; CI fails if it is out of date with the source (`tools/boot-args.py --check`).
 
-Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **350 arguments**: 279 read by the kernel, 14 by the loader, 68 by user space (one is read in more than one place).
+Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **365 arguments**: 294 read by the kernel, 16 by the loader, 68 by user space (one is read in more than one place).
 
 This is a catalogue of what exists and who reads it, not a manual. What an argument means is in the head of the file that reads it. The stable switches have a symbol in the configuration (`tools/hakios-config.py help SYMBOL`, `docs/configs.md`); the rest are the knobs of bring-up (a driver's steps, pauses, traces, test modes) and can change with the driver. Any of them can be given in a configuration with `CONFIG_BOOTARGS="name=value ..."`, which checks that each name is in this list. What the arguments of the two Metal paths do: [Metal on the Adreno](reference/metal.md#boot-arguments).
 
 Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl kern.bootargs`).
 
-## GPU and display (78)
+## GPU and display (80)
 
 | Argument | Layer | Read by | Configuration | Set by |
 |---|---|---|---|---|
@@ -84,6 +84,8 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
 | `rec_secs` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_REC_SECS` |  |
 | `rec_start` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_REC_START` |  |
 | `rec_step` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_REC_STEP` |  |
+| `soc` | KL | `hakios.adreno.c`, `hakios.adsp.c`, `hakios.battery.c`, `hakios.bt.c`, `hakios.goodix.c`, `hakios.ipa.c`, `hakios.mpss.c`, `hakios.s3910.c`, `hakios.thermal.c`, `hakios.wifi.c`, `loader.c` | `CONFIG_SOC` |  |
+| `soc_smem` | KL | `hakios.adreno.c`, `hakios.adsp.c`, `hakios.battery.c`, `hakios.bt.c`, `hakios.buttons.c`, `hakios.cpufreq.c`, `hakios.goodix.c`, `hakios.haptic.c`, `hakios.ipa.c`, `hakios.mpss.c`, `hakios.pmic.c`, `hakios.s3910.c`, `hakios.socinfo.c`, `hakios.thermal.c`, `hakios.wifi.c`, `loader.c` | `CONFIG_SOC_SMEM` |  |
 | `surf_clear` | K | `MiniIOSurface.cpp` | `CONFIG_SURF_CLEAR` |  |
 | `surf_wrap` | K | `MiniIOSurface.cpp` | `CONFIG_SURF_WRAP` |  |
 | `surftrace` | K | `MiniIOSurface.cpp` | `CONFIG_SURFTRACE` |  |
@@ -177,21 +179,21 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
 | `modem_sim_probe_off` | K | `hakios.mpss.c` | `CONFIG_MODEM_SIM_PROBE_OFF` |  |
 | `modem_sim_switch_off` | K | `hakios.mpss.c` | `CONFIG_MODEM_SIM_SWITCH_OFF` |  |
 | `modem_step` | K | `hakios.mpss.c` | `CONFIG_MODEM_STEP` |  |
+| `modem_verbose` | K | `hakios.mpss.c` | `CONFIG_MODEM_VERBOSE` |  |
 | `modem_wait` | K | `hakios.mpss.c` | `CONFIG_MODEM_WAIT` |  |
 | `modem_wda_off` | K | `hakios.mpss.c` | `CONFIG_MODEM_WDA_OFF` |  |
 | `soc_cmd_db` | K | `hakios.mpss.c` | `CONFIG_SOC_CMD_DB` |  |
-| `soc_gsi_base` | K | `hakios.ipa.c` | `CONFIG_SOC_GSI_BASE` |  |
+| `soc_gsi_base` | K | `hakios.ipa.c`, `hakios.mpss.c` | `CONFIG_SOC_GSI_BASE` |  |
 | `soc_imem` | K | `hakios.mpss.c` | `CONFIG_SOC_IMEM` |  |
-| `soc_ipa_base` | K | `hakios.ipa.c` | `CONFIG_SOC_IPA_BASE` |  |
+| `soc_ipa_base` | K | `hakios.ipa.c`, `hakios.mpss.c` | `CONFIG_SOC_IPA_BASE` |  |
 | `soc_ipa_fw` | K | `hakios.mpss.c` | `CONFIG_SOC_IPA_FW` |  |
 | `soc_ipa_stream` | K | `hakios.mpss.c` | `CONFIG_SOC_IPA_STREAM` |  |
 | `soc_ipa_stream_uc` | K | `hakios.mpss.c` | `CONFIG_SOC_IPA_STREAM_UC` |  |
 | `soc_mpss_mem` | K | `hakios.mpss.c` | `CONFIG_SOC_MPSS_MEM` |  |
 | `soc_pas_ipa` | K | `hakios.mpss.c` | `CONFIG_SOC_PAS_IPA` |  |
 | `soc_pas_mpss` | K | `hakios.mpss.c` | `CONFIG_SOC_PAS_MPSS` |  |
-| `soc_smem` | K | `hakios.mpss.c`, `hakios.socinfo.c` | `CONFIG_SOC_SMEM` |  |
 
-## Audio and battery (33)
+## Audio and battery (34)
 
 | Argument | Layer | Read by | Configuration | Set by |
 |---|---|---|---|---|
@@ -206,6 +208,7 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
 | `adsp_step` | K | `hakios.adsp.c` | `CONFIG_ADSP_STEP` |  |
 | `adsp_wait` | K | `hakios.adsp.c` | `CONFIG_ADSP_WAIT` |  |
 | `battery` | KL | `hakios.adsp.c`, `hakios.battery.c`, `loader.c` | `CONFIG_BATTERY` |  |
+| `battery_debug` | K | `hakios.battery.c` | `CONFIG_BATTERY_DEBUG` |  |
 | `battery_shared_pa` | K | `hakios.battery.c` |  | the loader (the address of its charger page) |
 | `battery_stop` | K | `hakios.battguard.c` | `CONFIG_BATTERY_STOP` |  |
 | `battery_stop_poll` | K | `hakios.battguard.c` | `CONFIG_BATTERY_STOP_POLL` |  |
@@ -247,19 +250,25 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
 | `cam_shutter` | K | `hakios.camera.c` | `CONFIG_CAM_SHUTTER` |  |
 | `cam_vblank` | K | `hakios.camera.c` | `CONFIG_CAM_VBLANK` |  |
 
-## Touch and buttons (10)
+## Touch and buttons (16)
 
 | Argument | Layer | Read by | Configuration | Set by |
 |---|---|---|---|---|
 | `buttons` | K | `hakios.buttons.c` | `CONFIG_BUTTONS` |  |
+| `buttons_cliffs` | K | `hakios.buttons.c` | `CONFIG_BUTTONS_CLIFFS` |  |
+| `buttons_debug` | K | `hakios.buttons.c` | `CONFIG_BUTTONS_DEBUG` |  |
 | `buttons_steps` | K | `hakios.buttons.c` | `CONFIG_BUTTONS_STEPS` |  |
 | `press_power` | K | `hakios.buttons.c` | `CONFIG_PRESS_POWER` |  |
 | `press_power_ms` | K | `hakios.buttons.c` | `CONFIG_PRESS_POWER_MS` |  |
+| `touch_debug` | K | `hakios.s3910.c` | `CONFIG_TOUCH_DEBUG` |  |
+| `touch_exit` | K | `hakios.input.c` | `CONFIG_TOUCH_EXIT` |  |
 | `touch_flip` | K | `hakios.goodix.c` | `CONFIG_TOUCH_FLIP` |  |
-| `touch_poll_us` | K | `hakios.goodix.c` | `CONFIG_TOUCH_POLL_US` |  |
+| `touch_poll_ms` | K | `hakios.s3910.c` | `CONFIG_TOUCH_POLL_MS` |  |
+| `touch_poll_us` | K | `hakios.goodix.c`, `hakios.s3910.c` | `CONFIG_TOUCH_POLL_US` |  |
 | `touch_rate` | K | `hakios.goodix.c` | `CONFIG_TOUCH_RATE` |  |
+| `touch_s3910` | K | `hakios.s3910.c` | `CONFIG_TOUCH_S3910` |  |
 | `touch_spi_hz` | K | `hakios.goodix.c` | `CONFIG_TOUCH_SPI_HZ` |  |
-| `touchscreen` | K | `hakios.buttons.c`, `hakios.goodix.c` | `CONFIG_TOUCHSCREEN` |  |
+| `touchscreen` | K | `hakios.buttons.c`, `hakios.goodix.c`, `hakios.s3910.c` | `CONFIG_TOUCHSCREEN` |  |
 | `virtio_input` | K | `hakios.virtio_input.c` | `CONFIG_VIRTIO_INPUT` |  |
 
 ## Storage and APFS (43)
@@ -328,22 +337,25 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
 | `torch_max_s` | K | `hakios.torch.c` | `CONFIG_TORCH_MAX_S` |  |
 | `torch_secs` | K | `hakios.torch.c` | `CONFIG_TORCH_SECS` |  |
 
-## Chip, thermal and PMIC (10)
+## Chip, thermal and PMIC (13)
 
 | Argument | Layer | Read by | Configuration | Set by |
 |---|---|---|---|---|
 | `pmic` | K | `hakios.pmic.c` | `CONFIG_PMIC` |  |
+| `pmic_cliffs` | K | `hakios.pmic.c` | `CONFIG_PMIC_CLIFFS` |  |
 | `pmic_list` | K | `hakios.pmic.c` | `CONFIG_PMIC_LIST` |  |
 | `soc_smem_size` | K | `hakios.socinfo.c` | `CONFIG_SOC_SMEM_SIZE` |  |
 | `socinfo` | K | `hakios.socinfo.c` | `CONFIG_SOCINFO` |  |
 | `thermal` | K | `hakios.thermal.c` | `CONFIG_THERMAL` |  |
+| `thermal_cliffs` | K | `hakios.thermal.c` | `CONFIG_THERMAL_CLIFFS` |  |
 | `thermal_log` | K | `hakios.thermal.c` | `CONFIG_THERMAL_LOG` |  |
 | `thermal_poll` | K | `hakios.thermal.c` | `CONFIG_THERMAL_POLL` |  |
 | `thermal_stop` | K | `hakios.thermal.c` | `CONFIG_THERMAL_STOP` |  |
 | `thermal_tm0` | K | `hakios.thermal.c` | `CONFIG_THERMAL_TM0` |  |
 | `thermal_tm1` | K | `hakios.thermal.c` | `CONFIG_THERMAL_TM1` |  |
+| `thermal_tm2` | K | `hakios.thermal.c` | `CONFIG_THERMAL_TM2` |  |
 
-## CPU, memory and boot (23)
+## CPU, memory and boot (26)
 
 | Argument | Layer | Read by | Configuration | Set by |
 |---|---|---|---|---|
@@ -351,6 +363,9 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
 | `applog_name` | K | `(patch)` | `CONFIG_APPLOG_NAME` |  |
 | `bootcpu` | KL | `loader.c`, `loader_return.c` | `CONFIG_BOOTCPU` |  |
 | `cpufreq` | K | `hakios.cpufreq.c` | `CONFIG_CPUFREQ` |  |
+| `cpufreq_cliffs` | K | `hakios.cpufreq.c` | `CONFIG_CPUFREQ_CLIFFS` |  |
+| `cpufreq_max_mhz` | K | `hakios.cpufreq.c` | `CONFIG_CPUFREQ_MAX_MHZ` |  |
+| `cpufreq_turbo` | K | `hakios.cpufreq.c` | `CONFIG_CPUFREQ_TURBO` |  |
 | `cpuload` | K | `hakios.cpufreq.c` | `CONFIG_CPULOAD` |  |
 | `ddr` | K | `hakios.cpufreq.c` | `CONFIG_DDR` |  |
 | `ddr_rest` | K | `hakios.cpufreq.c` | `CONFIG_DDR_REST` |  |

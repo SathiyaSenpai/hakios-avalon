@@ -42,19 +42,6 @@ never committed; they are obtained from their own upstreams under their own lice
 
 These are flagged for review and are **not** asserted to be settled:
 
-- **UEFI driver binaries** under `devices/redwood/uefi/files/Binaries/` are the phone
-  vendor's (Qualcomm/Xiaomi), extracted from the device's own `xbl.img`. They are needed only to
-  rebuild the UEFI image and can be removed and re-extracted by each user from their own phone
-  with UEFIReader. Whether redistributing them is permitted has not been confirmed with the
-  vendor; a user who is unsure should delete them and extract their own. Tracked in
-  `THIRD_PARTY_LICENSES.md`.
-- **The FocalTech touch-controller firmware header** (`drivers/input/hakios.focaltech_fw.h`)
-  is generated from a firmware blob on the device. Its redistribution terms are the touch
-  vendor's and have not been confirmed; it is a candidate for moving to the pull-from-device
-  model the rest of the firmware already uses.
-- **Mu-Silicium / Project Mu** derived files under `devices/redwood/uefi/` carry upstream
-  BSD-2-Clause-Patent and GPL-2.0-or-MIT headers; the derived parts keep those licenses.
-
 - **Metal on Vulkan (`M2V=1`).** metal2vulkan is `GPL-2.0-or-later OR LGPL-3.0-or-later`, and `userland/build.sh` links it statically into the
   Metal plug-in and `m2v_test`. A binary so built has obligations; what they are here, and whether they can be met together with the other
   parts of that binary, has not been settled. **No such binary is distributed**: nothing of it is in `prebuilt/`, and each user fetches and

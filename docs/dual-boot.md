@@ -1,6 +1,6 @@
 # Installing beside Android
 
-HakiOS on the POCO X5 Pro (redwood) as a second system: Android stays where it is, and at every start a menu asks which
+HakiOS on the OnePlus Nord 4 (`avalon`) as a second system: Android stays where it is, and at every start a menu asks which
 one to run. This page is for the person installing it. How it works underneath, and every step as it was first done and
 checked, is in [U-Boot](u-boot.md).
 
@@ -78,7 +78,7 @@ restarts by itself is better off in Android. The volume keys move, the power key
 | Reset | restarts |
 
 After Android is chosen, slot b is active and the phone starts straight into Android. To have the menu again:
-`fastboot set_active a`, or, in Android with root, the service `hakios-menu.sh` (`devices/redwood/u-boot/android/`),
+`fastboot set_active a`, or, in Android with root, the service `hakios-menu.sh` (`devices/avalon/u-boot/`),
 which does it after every boot.
 
 ## Your data
@@ -94,7 +94,7 @@ has finished, some icons and the wallpaper may be missing.
 
 | Part | State | |
 |---|---|---|
-| Display, touch, the interface | works | drawn by the Adreno 642L through OpenGL ES |
+| Display, touch, the interface | works | continuous splash 120 Hz (`1240x2772`) + Synaptics S3910 SPI |
 | Data volume | works | HFS Plus, about 12 GB, kept |
 | Wi-Fi | partly | started with `wifi=1` |
 | Graphics effects | partly | the renderer lacks some of the functions a few effects use |

@@ -2,7 +2,7 @@
 # HakiOS common defconfig: every setting there is, with what it does.
 # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
 #
-# 371 symbols in 18 groups; 34 are set, 25 of them drivers built in.
+# 387 symbols in 18 groups; 35 are set, 26 of them drivers built in.
 #
 
 #
@@ -12,14 +12,14 @@
 # the directory of the phone under devices/ this configuration is for
 # CONFIG_DEVICE is not set
 
-# the SoC family (sc7280: SM7325, QCM6490); it is part of the kernel's version string
+# the SoC family (cliffs: SM7675); it is part of the kernel's version string
 # CONFIG_SOC is not set
 
 # "device": options may use firmware pulled from your own phone (fw-*/); "none": the open configuration, nothing of ...
 CONFIG_FIRMWARE="device"
 
 #
-# Drivers built in (25)
+# Drivers built in (26)
 #
 
 # the audio DSP started and linked (adsp=1, adsp_step=N); the battery's state comes through it too. Needs the DSP's ... [hakios.adsp.c]
@@ -37,10 +37,10 @@ CONFIG_HAKIOS_MIC=y
 # QEMU's virtio sound device as the player of /dev/hakios-audio (virtio_sound=1). QEMU only [hakios.virtio_sound.c]
 CONFIG_HAKIOS_VIRTIO_SOUND=y
 
-# the Bluetooth half of the WCN6750: step one, a read-only look at its three pins (bt=1) [hakios.bt.c]
+# the Bluetooth half of the WCN6750: pin/rail/clock survey (bt=1) and Cliffs GENI UART / HCI bringup (bt=2, bt=3) [hakios.bt.c]
 CONFIG_HAKIOS_BT=y
 
-# the cameras (cam=N): the sensors on the CCI bus and the ISP's interface. The sensors, their tables (fw-camera/) and ... [hakios.camera.c]
+# the cameras (cam=N): the sensors on the CCI bus and the ISP's interface (fw-camera/) [hakios.camera.c]
 CONFIG_HAKIOS_CAMERA=y
 
 # the flashlight: the flash LED module of the PM8350C (torch=1); it stays off while the battery is too warm [hakios.torch.c]
@@ -49,7 +49,7 @@ CONFIG_HAKIOS_TORCH=y
 # the chip's identity from the firmware's shared memory: kern.hakios.soc_* (socinfo=1). Any Qualcomm SoC that keeps ... [hakios.socinfo.c]
 CONFIG_HAKIOS_SOCINFO=y
 
-# the Adreno 642L of the SC7280 woken step by step (adreno=N), and HakiosGPU, the IOKit service Mesa, Metal and the ... [hakios.adreno.c, hakios.gpu.cpp]
+# the Adreno GPU driver woken step by step (adreno=N), and HakiosGPU, the IOKit service Mesa, Metal and the window ... [hakios.adreno.c, hakios.gpu.cpp]
 CONFIG_HAKIOS_ADRENO=y
 
 # the vibration motor: an Awinic AW86927 driving a linear resonant actuator (haptic=N), its waveforms from fw-haptic/ [hakios.haptic.c]
@@ -58,8 +58,11 @@ CONFIG_HAKIOS_HAPTIC=y
 # QEMU's virtio tablet and keyboard as the touch screen and the buttons (virtio_input=1). QEMU only [hakios.virtio_input.c]
 CONFIG_HAKIOS_VIRTIO_INPUT=y
 
-# the touch screen: a Goodix GT9916 ("Berlin-D") or a FocalTech FT3680 on SPI (touchscreen=1). The bus, pins and ... [hakios.goodix.c]
+# the touch screen: a Goodix GT9916 ("Berlin-D") or a FocalTech FT3680 on SPI (touchscreen=1). [hakios.goodix.c]
 CONFIG_HAKIOS_GOODIX=y
+
+# the touch screen: Synaptics S3910 on SPI (touchscreen=1) for OnePlus Nord 4 (avalon) [hakios.s3910.c]
+CONFIG_HAKIOS_S3910=y
 
 # the power and volume keys, read from the PMIC through the SPMI arbiter (buttons=1) [hakios.buttons.c]
 CONFIG_HAKIOS_BUTTONS=y
@@ -98,7 +101,7 @@ CONFIG_HAKIOS_VIRTIO_BLK=y
 CONFIG_HAKIOS_WIFI=y
 
 #
-# CPU, memory and boot (21)
+# CPU, memory and boot (24)
 #
 
 # CPU cores the kernel uses, 1 to 8; one if not set
@@ -115,6 +118,15 @@ CONFIG_HAKIOS_WIFI=y
 
 # read by the patch to Apple's files (kernel)
 # CONFIG_APPLOG_NAME is not set
+
+# read by hakios.cpufreq.c (kernel)
+# CONFIG_CPUFREQ_CLIFFS is not set
+
+# read by hakios.cpufreq.c (kernel)
+# CONFIG_CPUFREQ_MAX_MHZ is not set
+
+# read by hakios.cpufreq.c (kernel)
+# CONFIG_CPUFREQ_TURBO is not set
 
 # every MS milliseconds, how busy each of our cores was meanwhile, in percent, to the loader's log (tools/frames.py ...
 # CONFIG_CPULOAD is not set
@@ -301,7 +313,7 @@ CONFIG_UFS=2
 # CONFIG_VIRTIO_BLK is not set
 
 #
-# Touch and buttons (10)
+# Touch and buttons (16)
 #
 
 # the touch screen, and the power and volume buttons
@@ -309,6 +321,12 @@ CONFIG_TOUCHSCREEN=y
 
 # read by hakios.buttons.c (kernel)
 # CONFIG_BUTTONS is not set
+
+# read by hakios.buttons.c (kernel)
+# CONFIG_BUTTONS_CLIFFS is not set
+
+# read by hakios.buttons.c (kernel)
+# CONFIG_BUTTONS_DEBUG is not set
 
 # read by hakios.buttons.c (kernel)
 # CONFIG_BUTTONS_STEPS is not set
@@ -319,14 +337,26 @@ CONFIG_TOUCHSCREEN=y
 # read by hakios.buttons.c (kernel)
 # CONFIG_PRESS_POWER_MS is not set
 
+# read by hakios.s3910.c (kernel)
+# CONFIG_TOUCH_DEBUG is not set
+
+# read by hakios.input.c (kernel)
+# CONFIG_TOUCH_EXIT is not set
+
 # read by hakios.goodix.c (kernel)
 # CONFIG_TOUCH_FLIP is not set
 
-# read by hakios.goodix.c (kernel)
+# read by hakios.s3910.c (kernel)
+# CONFIG_TOUCH_POLL_MS is not set
+
+# read by hakios.goodix.c, hakios.s3910.c (kernel)
 # CONFIG_TOUCH_POLL_US is not set
 
 # the chip reports twice as often (Xiaomi's game mode; 240 otherwise)
 # CONFIG_TOUCH_RATE is not set
+
+# read by hakios.s3910.c (kernel)
+# CONFIG_TOUCH_S3910 is not set
 
 # the bus at N Hz (Android's device tree gives the chip 5 MHz)
 # CONFIG_TOUCH_SPI_HZ is not set
@@ -335,7 +365,7 @@ CONFIG_TOUCHSCREEN=y
 # CONFIG_VIRTIO_INPUT is not set
 
 #
-# GPU and display (76)
+# GPU and display (78)
 #
 
 # rendering on Adreno (an image built with GL=1; the GPU's firmware from your phone) [needs fw-gpu/ from the phone]
@@ -398,6 +428,9 @@ CONFIG_GPU=y
 # read by MiniIOMobileFramebuffer.cpp (kernel)
 # CONFIG_FB_HZ is not set
 
+# the registers of the display interface the panel is on, for a port
+# CONFIG_FB_INTF is not set
+
 # how often the panel is really refreshed
 # CONFIG_FB_MEASURE is not set
 
@@ -422,7 +455,7 @@ CONFIG_GPU=y
 # log the first N calls of every selector (default 3)
 # CONFIG_FBTRACE is not set
 
-# read by MiniIOMobileFramebuffer.cpp (kernel)
+# read by MiniIOMobileFramebuffer.cpp, inject_sb.c (kernel and user space)
 # CONFIG_FBWIDTH is not set
 
 # the surface's memory, as before
@@ -548,6 +581,9 @@ CONFIG_GPU=y
 # read by MiniIOMobileFramebuffer.cpp (kernel)
 # CONFIG_REC_STEP is not set
 
+# where SMEM is (also the modem driver's argument; 0x80900000 on the reference phone)
+# CONFIG_SOC_SMEM is not set
+
 # kept memory is given out as it is (to see what the clearing costs; a surface is then not all zeroes)
 # CONFIG_SURF_CLEAR is not set
 
@@ -567,7 +603,7 @@ CONFIG_GPU=y
 # CONFIG_VBLUR is not set
 
 #
-# Audio and battery (32)
+# Audio and battery (33)
 #
 
 # the audio DSP; the battery level in the UI and charging state come through it [needs fw-audio/ from the phone]
@@ -614,6 +650,9 @@ CONFIG_SOUND=4
 
 # read by hakios.adsp.c, hakios.battery.c, loader.c (kernel and loader)
 # CONFIG_BATTERY is not set
+
+# read by hakios.battery.c (kernel)
+# CONFIG_BATTERY_DEBUG is not set
 
 # every property once, for the log (which number is which on this phone's firmware)
 # CONFIG_BATTMGR is not set
@@ -888,6 +927,9 @@ CONFIG_MODEM_AGAIN=y
 # CONFIG_MODEM_STEP is not set
 
 # read by hakios.mpss.c (kernel)
+# CONFIG_MODEM_VERBOSE is not set
+
+# read by hakios.mpss.c (kernel)
 # CONFIG_MODEM_WAIT is not set
 
 # read by hakios.mpss.c (kernel)
@@ -896,13 +938,13 @@ CONFIG_MODEM_AGAIN=y
 # read by hakios.mpss.c (kernel)
 # CONFIG_SOC_CMD_DB is not set
 
-# read by hakios.ipa.c (kernel)
+# read by hakios.ipa.c, hakios.mpss.c (kernel)
 # CONFIG_SOC_GSI_BASE is not set
 
 # read by hakios.mpss.c (kernel)
 # CONFIG_SOC_IMEM is not set
 
-# read by hakios.ipa.c (kernel)
+# read by hakios.ipa.c, hakios.mpss.c (kernel)
 # CONFIG_SOC_IPA_BASE is not set
 
 # read by hakios.mpss.c (kernel)
@@ -922,9 +964,6 @@ CONFIG_MODEM_AGAIN=y
 
 # read by hakios.mpss.c (kernel)
 # CONFIG_SOC_PAS_MPSS is not set
-
-# where SMEM is (also the modem driver's argument; 0x80900000 on the reference phone)
-# CONFIG_SOC_SMEM is not set
 
 #
 # Cameras (13)
@@ -989,7 +1028,7 @@ CONFIG_MODEM_AGAIN=y
 # CONFIG_TORCH_SECS is not set
 
 #
-# Chip, thermal and PMIC (10)
+# Chip, thermal and PMIC (13)
 #
 
 # read the chip's identity from the firmware's shared memory: kern.hakios.soc_* (SoC number, revision, board)
@@ -1007,11 +1046,17 @@ CONFIG_MODEM_AGAIN=y
 # list every block of the power-management chips the SPMI arbiter shows, and read the PMIC's clock; read only
 # CONFIG_PMIC is not set
 
+# read by hakios.pmic.c (kernel)
+# CONFIG_PMIC_CLIFFS is not set
+
 # only the clock, not the inventory of every block
 # CONFIG_PMIC_LIST is not set
 
 # read by hakios.socinfo.c (kernel)
 # CONFIG_SOC_SMEM_SIZE is not set
+
+# read by hakios.thermal.c (kernel)
+# CONFIG_THERMAL_CLIFFS is not set
 
 # a summary line this often (0: only on a rise; 60)
 # CONFIG_THERMAL_LOG is not set
@@ -1021,6 +1066,9 @@ CONFIG_MODEM_AGAIN=y
 
 # read by hakios.thermal.c (kernel)
 # CONFIG_THERMAL_TM1 is not set
+
+# read by hakios.thermal.c (kernel)
+# CONFIG_THERMAL_TM2 is not set
 
 #
 # Network (3)
@@ -1087,10 +1135,10 @@ CONFIG_MODEM_AGAIN=y
 # read by inject_sb.c (user space)
 # CONFIG_AUTOUNLOCK is not set
 
-# read by hakios.bt.c (kernel)
+# Read-only survey: TLMM pins (plus UART pins), SPMI BT rails, cmd-db addresses, GCC clocks
 # CONFIG_BT is not set
 
-# the second look this many seconds later (0: no second look; 30)
+# Seconds until second pin look in bt=1 mode (0: none; default 30)
 # CONFIG_BT_AGAIN is not set
 
 # read by inject.c (user space)

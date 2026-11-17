@@ -6,14 +6,14 @@
  * it. All of that - the real init, its tests, the list of launchd jobs - is
  * in the small image that travels with the kernel (the second RAM disk,
  * /dev/md1), an APFS container (tools/apfs/mkapfs.py). This program
- * mounts it on /redwood and hands over.
+ * mounts it on /avalon and hands over.
  */
 #include "mini.h"
 
 int
 main(int argc, char **argv, char **envp)
 {
-	char *init_argv[] = { "/redwood/sbin/init", NULL };
+	char *init_argv[] = { "/avalon/sbin/init", NULL };
 	int fd = open("/dev/console", O_RDWR, 0);
 
 	(void)argc, (void)argv;
@@ -24,11 +24,15 @@ main(int argc, char **argv, char **envp)
 		close(fd);
 	}
 
-	if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/md1") != 0) {
-		printf("stage0: cannot mount /dev/md1 on /hakios: %s\n", strerror(errno));
-	} else {
+	if (mount("apfs", "/avalon", MNT_RDONLY, (void *)"/dev/md1") == 0) {
 		execve(init_argv[0], init_argv, envp);
 		printf("stage0: cannot run %s: %s\n", init_argv[0], strerror(errno));
+	} else if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/md1") == 0) {
+		init_argv[0] = "/redwood/sbin/init";
+		execve(init_argv[0], init_argv, envp);
+		printf("stage0: cannot run %s: %s\n", init_argv[0], strerror(errno));
+	} else {
+		printf("stage0: cannot mount /dev/md1 on /avalon or /redwood: %s\n", strerror(errno));
 	}
 	reboot(0x08 /* RB_HALT */);
 	return 1;

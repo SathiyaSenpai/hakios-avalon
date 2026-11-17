@@ -53,12 +53,12 @@ try:
         if os.path.isfile(os.path.join(ROOT, "drivers", sub, "conf")):
             os.makedirs(os.path.join(root, "drivers", sub))
             shutil.copy(os.path.join(ROOT, "drivers", sub, "conf"), os.path.join(root, "drivers", sub, "conf"))
-    shutil.copytree(os.path.join(ROOT, "devices", "qemu"), os.path.join(root, "devices", "qemu"))
+    shutil.copytree(os.path.join(ROOT, "devices", "avalon"), os.path.join(root, "devices", "avalon"))
 
     r = tool(root, "hakios-device.py", "new", "fakephone", "--soc", "fakesoc", "--title", "Fake Phone")
     check("new: a device repository that check passes", r.returncode == 0 and "all hold together" in r.stdout, r.stdout + r.stderr)
     conf = open(os.path.join(root, "devices", "fakephone", "configs", "fakephone.config")).read()
-    check("new: the phone drivers left out, the SoC's kept, QEMU's untouched",
+    check("new: the phone drivers left out, the SoC's kept",
           "# CONFIG_HAKIOS_GOODIX is not set" in conf and "HAKIOS_THERMAL" not in conf and "HAKIOS_VIRTIO" not in conf, conf)
     r = tool(root, "hakios-device.py", "new", "fakephone", "--soc", "fakesoc", "--title", "x")
     check("new: refuses a device that exists", r.returncode != 0 and "already exists" in r.stderr, r.stderr)
@@ -127,7 +127,7 @@ try:
     r = tool(ROOT, "hakios-device.py", "check")
     check("the devices and SoCs of this tree hold together", r.returncode == 0, r.stdout + r.stderr)
     r = tool(ROOT, "hakios-device.py", "list")
-    check("list names the QEMU device, which the common repository always has", "qemu" in r.stdout, r.stdout)
+    check("list names the avalon device", "avalon" in r.stdout, r.stdout)
 finally:
     shutil.rmtree(work, ignore_errors=True)
 

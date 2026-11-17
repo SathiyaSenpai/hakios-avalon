@@ -11,8 +11,8 @@ hakios/                          common: the kernel port, every common driver, t
 └── devices/manifest.conf        every device and the UEFI: kept in this tree, or a repository of its own at a revision
 ```
 
-A SoC or device directory is the same whether it is kept in the common tree (`devices/qemu` is) or is a git repository of its own
-that `tools/hakios-device.py sync` cloned into place (the others are): the tools look for `socs/*/soc.conf` and
+A SoC or device directory is the same whether it is kept in the common tree (`devices/avalon` is) or is a git repository of its own
+that `tools/hakios-device.py sync` clones into place: the tools look for `socs/*/soc.conf` and
 `devices/*/device.conf`, whatever put them there. The common repository ignores what `sync` clones.
 
 ## A device repository
@@ -31,28 +31,28 @@ that `tools/hakios-device.py sync` cloned into place (the others are): the tools
 ### `device.conf`
 
 ```
-device redwood
-	title       POCO X5 Pro 5G
-	vendor      Xiaomi
-	soc         sc7280
-	defconfig   redwood_defconfig
+device avalon
+	title       OnePlus Nord 4
+	vendor      OnePlus
+	soc         cliffs
+	defconfig   avalon_defconfig
 	firmware    pull-firmware.sh
-	maintainer  the HakiOS developers (README.md)
-	status      touch       works     Goodix GT9916 / FocalTech FT3680 on SPI, multitouch (touchscreen=1)
-	status      cellular    partial   the modem boots, sees the network; no registration yet
-	status      bluetooth   missing   step one only
+	maintainer  sathiya
+	status      display     works     the panel through continuous splash framebuffer at 0xe3940000 (1240x2772, 120Hz)
+	status      touch       works     Synaptics S3910 on QUPv3 SE4 SPI (CONFIG_HAKIOS_S3910, touchscreen=1)
+	status      cellular    missing   Cliffs MPSS (0x8bc00000); soc.args populated, not yet ported
 ```
 
 | Word | Means |
 |---|---|
 | `title`, `vendor` | what it is called |
-| `soc` | the SoC family: `socs/<soc>/` must be there; `none` for a machine without one (QEMU) |
+| `soc` | the SoC family: `socs/<soc>/` or `devices/<name>/soc/` must be there |
 | `defconfig` | its defconfig, in its `configs/` |
 | `firmware` | the script that pulls its firmware |
 | `maintainer` | who answers for it |
 | `status <area> works\|partial\|missing <note>` | how far a part works, **as seen on this device**; the note says how it is turned on and what is not done. Areas: display, touch, buttons, cpu, gpu, storage, audio, battery, haptic, camera, torch, wifi, bluetooth, cellular, network, thermal, usb, sensors |
 
-The device's page in this documentation ([redwood](../devices/redwood.md)) and the table of [all devices](../devices/index.md)
+The device's page in this documentation ([avalon](../devices/avalon.md)) and the table of [all devices](../devices/index.md)
 are made from it by `tools/docs-gen.py`: the status is written once, next to the code it describes.
 
 ## The SoC's layer
@@ -60,19 +60,19 @@ are made from it by `tools/docs-gen.py`: the status is written once, next to the
 A device carries its SoC family's layer with it, in `soc/`, so that one repository is all a device needs:
 
 ```
-soc sc7280
-	title       Qualcomm SC7280 family (SM7325 "Snapdragon 778G", QCM6490; "yupik", "kodiak")
+soc cliffs
+	title       Qualcomm SM7675 Cliffs
 	vendor      Qualcomm
 	cores       8, the biggest is core 7
-	gpu         Adreno 642L
-	maintainer  the HakiOS developers (README.md)
+	gpu         Adreno 732
+	maintainer  sathiya
 ```
 
 and `soc/configs/<soc>.config`, the SoC's facts: `CONFIG_SOC`, its cores, and **the drivers of the SoC family**
 (`CONFIG_HAKIOS_CPUFREQ=y`, `CONFIG_HAKIOS_THERMAL=y`, ...), so that the device has them whatever it leaves out of its own.
 
 Two devices with the same SoC each carry a copy. The copies must be the same: the tools take the SoC once, and refuse two copies that
-differ, naming both, because a build would otherwise depend on which device was checked out. `tools/hakios-device.py new --soc sc7280`
+differ, naming both, because a build would otherwise depend on which device was checked out. `tools/hakios-device.py new --soc cliffs`
 copies the layer from a device that has it; a SoC nobody has yet gets a new layer to fill in. A SoC many devices share can also be a
 repository of its own in `socs/<soc>/` (a `soc` block in the manifest); the tools read both.
 
@@ -81,13 +81,12 @@ repository of its own in `socs/<soc>/` (a `soc` block in the manifest); the tool
 `devices/manifest.conf` names every SoC and device:
 
 ```
-device redwood
-	repository  https://github.com/oosexgang/hakios-sm7325.git
-	revision    
+device avalon
+	path        devices/avalon
 
-device qemu
-	path        devices/qemu                       kept in the common tree
-
+device example
+	repository  https://github.com/<you>/hakios-device-example.git
+	revision    0123456789abcdef0123456789abcdef01234567
 device sheng
 	repository  https://github.com/<you>/hakios-device-sheng.git
 	revision    0123456789abcdef0123456789abcdef01234567

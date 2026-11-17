@@ -15,8 +15,7 @@ Everything below the next section is the record of how it went, with the dates, 
 | `metal=1` kills the window server | no longer: `tools/metal-run.sh` runs with it on, and it is still off by default |
 | Whether the framebuffer counts frames | it does, every 5 s (`tools/metal-run.sh`'s summary); `tools/frames.py` counts them per gesture from the `tl:` lines |
 
-Read `docs/ru/metal.md` (why Metal is not simply missing, and what is on each side of the wall) and `docs/air.md` (the
-shader compiler) first. The rest of this file is the order of work, with how each step is checked and where.
+Read `docs/air.md` (the shader compiler) first. The rest of this file is the order of work, with how each step is checked and where.
 
 ## The three parts
 
@@ -26,8 +25,7 @@ shader compiler) first. The rest of this file is the order of work, with how eac
 | **B. The device** | what Metal loads: a bundle with a subclass of Metal's private `_MTLDevice`, and the objects it hands out (buffers, libraries, pipeline states, queues, command buffers, encoders: 53 classes and about 1200 methods in Apple's own) | done for the window server: `userland/src/HakiosMetalCA.m` over hakios-metal; or UniXNU's frontend with `metal_m2v=1` |
 | **C. The kernel side** | submitting work to the GPU for a Metal client, with memory and fences | done: `HakiosGPUUserClient` (`drivers/gpu/hakios.gpu.cpp`) serves both paths; request `0x7d` takes a client's own pages as a buffer |
 
-What "real Metal" would be, and why games are out of reach, is argued in `docs/ru/metal.md` section 9.4: that has not
-changed. What this plan aims at is the part that is within reach: **Metal clients of the system itself** (the window
+What this plan aims at is **Metal clients of the system itself** (the window
 server's compositor, CoreImage, the camera's viewfinder) running on the Adreno through B and C, with shaders from A.
 
 ## The order, and how each step is checked
@@ -51,7 +49,7 @@ Without a phone, steps 1 and 2 are all that can be done and checked. Steps 3 to 
   nothing changes: **the properties stay off by default, on purpose**. With them a program that asks for Metal gets a
   device, and CoreAnimation would pick Metal for the screen; until that device can draw, the screen without it is the
   working one.
-- `userland/src/HakiosMetal.m`, `userland/src/HakiosMetal.plist`: the bundle, built into `/redwood/lib/HakiosMetal.bundle` and
+- `userland/src/HakiosMetal.m`, `userland/src/HakiosMetal.plist`: the bundle, built into `/avalon/lib/HakiosMetal.bundle` and
   linked at `/System/Library/Extensions/HakiosMetal.bundle` (`userland/build.sh`).
 - `userland/src/metal_test.m` and `userland/rc.jobs.metal`: the check that already existed.
 
@@ -61,7 +59,7 @@ Run in a loop of rebuild-image, boot, read the log; each pass gave the next requ
 
 1. **Metal found the service, loaded the bundle and made the class**: `HakiosMetal: the class HakiosMetalDevice is registered`
    in `backboardd` and `mediaserverd`, then `a device for the accelerator port N (made)`: `-initWithAcceleratorPort:` was
-   called and `_MTLDevice`'s own `-init` returned an object. So the discovery chain of `docs/ru/metal.md` section 1 is as described.
+   called and `_MTLDevice`'s own `-init` returned an object.
 2. `MTLAddDevice` then **asserted that the class conforms to the protocol `MTLDevice`**, and, once it did, **to the private
    protocol `MTLDeviceSPI`** (neither is declared by `_MTLDevice` itself, so the class declares them).
 3. With both declared, the first messages sent to the device, in this order: **`-featureProfile`**, **`-maxBufferLength`**,

@@ -4,7 +4,7 @@
 usage: tools/kernel-version.py [--short | --name | --darwin | --release | --all]
                                [--config FILE] [--root DIR]
 
-  (none)    2.3.4-hakios-darwin22.5-sc7280-g1a2b3c4d[-dirty]   what goes under the banner as kernel.ver=
+  (none)    2.3.4-hakios-darwin22.5-cliffs-g1a2b3c4d[-dirty]   what goes under the banner as kernel.ver=
   --short   2.3.4                                              VERSION.PATCHLEVEL.SUBLEVEL
   --release 2.3.4-hakios                                       with EXTRAVERSION: what a tag is called (v2.3.4-hakios)
   --name    Hello Darwin                                        the release's name
@@ -15,7 +15,7 @@ The parts of the full string, in the order Android's kernels give theirs:
   VERSION.PATCHLEVEL.SUBLEVEL  from the file VERSION
   EXTRAVERSION                 ... likewise
   -darwin<major>.<minor>       the Darwin it is built on (DARWIN in VERSION)
-  -<soc>                       CONFIG_SOC of the active configuration, if there is one (`make redwood_defconfig`)
+  -<soc>                       CONFIG_SOC of the active configuration, if there is one (`make avalon_defconfig`)
   -g<commit>[-dirty]           git: the commit, and "-dirty" if a tracked file differs from it
 
 HAKIOS_VERSION_SUFFIX in the environment replaces the git part (a reproducible build, or a tree that is

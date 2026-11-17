@@ -48,7 +48,7 @@ fi
 
 if have cc || have clang; then ok "C compiler ($(have cc && echo cc || echo clang)): builds unzbm for sysimage/unpack.sh"; else need "no C compiler" "install clang or gcc"; fi
 have git && ok "git" || bad "git not found" "install git"
-if have lld-link; then ok "lld-link: the boot loader can be built (xnuloader/build.sh)"; else warn "lld-link not found" "needed to build the boot loader with the iPhone identity from your own IPSW (make loader), which the Darwin run needs (apt: lld; brew: lld); the open kernel (make qemu-open) runs with prebuilt/loader.efi, which has no Apple data"; fi
+if have lld-link; then ok "lld-link: the boot loader can be built (xnuloader/build.sh)"; else warn "lld-link not found" "needed to build the boot loader with the iPhone identity from your own IPSW (make loader), which the Darwin run needs (apt: lld; brew: lld); the open kernel runs with prebuilt/loader.efi, which has no Apple data"; fi
 have lz4 && ok "lz4" || warn "lz4 not found" "needed by some image steps (apt: lz4)"
 
 if have flock; then
@@ -78,29 +78,9 @@ elif [ -d "$theos/sdks/iPhoneOS16.5.sdk" ]; then
 else
 	warn "no theos SDK ($theos/sdks/iPhoneOS16.5.sdk)" "optional, only to rebuild the kernel or userland (theos + xnu-deps/setup.sh); PREBUILT=1 and prebuilt/ work without"
 fi
-if have qemu-system-aarch64; then
-	ok "qemu-system-aarch64: make qemu-open works"
-	# what the Darwin run (qemu/run-darwin.sh) needs on top: a display device, the UEFI firmware, memory. Without the display
-	# SpringBoard does not start, and the window stays black, which is what people reported first.
-	if qemu-system-aarch64 -device help 2>/dev/null | grep -q '"ramfb"'; then ok "qemu has the ramfb display device (the screen of qemu/run-darwin.sh)"
-	else bad "this qemu-system-aarch64 has no ramfb display device" "the screen stays black without it: install a QEMU of 7.0 or newer (the full package, e.g. qemu-system-arm on Debian/Ubuntu)"; fi
-	fw=""; for f in "${QEMU_EFI:-}" /usr/share/edk2/aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd; do [ -n "$f" ] && [ -f "$f" ] && { fw=$f; break; }; done
-	if [ -n "$fw" ]; then ok "UEFI firmware for the guest: $fw"
-	else bad "no UEFI firmware for aarch64 guests" "install edk2-aarch64 (Arch) or qemu-efi-aarch64 (Debian/Ubuntu), or set QEMU_EFI and QEMU_VARS"; fi
-	# the guest has 7 GB of RAM by default (QEMU_RAM_GB, never below 6: the system image sits in it, 3 GB up)
-	mem_mb=$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)
-	if [ -n "$mem_mb" ]; then
-		if [ "$mem_mb" -ge 7200 ]; then ok "memory: ${mem_mb} MB available (the Darwin run wants about 7 GB)"
-		else warn "memory: only ${mem_mb} MB available; the Darwin run asks QEMU for 7 GB" "close other programs, or on a small machine give WSL/the VM more memory; below that the host swaps and the window stays black for a long time"; fi
-	fi
-	note "this is an emulated CPU, so the run is slow: the window is black for the first minute or two, then the Apple logo,"
-	note "then the lock screen after about 3 to 10 minutes. 'tail -f logs/qemu.log' shows it is alive; qemu/screendump.sh saves the screen."
-else
-	warn "no qemu-system-aarch64" "optional: only for the QEMU targets"
-fi
 
 head1 "What is already built here"
-if [ -f fw-modem/modem.mdt ]; then ok "phone firmware pulled (fw-*/)"; else warn "no fw-modem/ yet" "with the phone on adb: devices/redwood/pull-firmware.sh, or pull-firmware-root.sh if that gets nothing"; fi
+if [ -f fw-touch/FW_S3910_TIANMA.img ] || [ -f fw-modem/modem.mdt ]; then ok "phone firmware pulled (fw-*/)"; else warn "no firmware pulled yet" "with vendor dump or phone on adb: devices/avalon/pull-firmware.sh"; fi
 if [ -f userland/system.apfs ] && [ -f userland/root.apfs ]; then ok "userland/system.apfs and root.apfs"; else warn "no Darwin images yet" "make unpack IPSW=your.ipsw (Darwin userland 16.5 20F66 for iPhone X, which you get yourself), then PREBUILT=1 REST=1 MODEM=1 SYSTEM=1 userland/build.sh (~8 GB)"; fi
 
 head1 "Phone"
@@ -127,13 +107,10 @@ else
 		dtm=$(A 'cat /proc/device-tree/model 2>/dev/null'); dtc=$(A 'cat /proc/device-tree/compatible 2>/dev/null | tr "\\0" " "')
 		note "reports: model='$model' board='$board' soc='$soc'"
 		note "device tree: model='$dtm' compatible='$dtc'"
-		if echo "$dtm $board" | grep -qi redwood && [ "$soc" = SM7325 ]; then
-			ok "redwood / SM7325: the reference platform (devices/redwood)"
-			if ! echo "$model" | grep -qiE 'poco|redwood|2210132'; then
-				note "the reported model '$model' is not a POCO X5 Pro name: it is probably spoofed; the device tree is what counts"
-			fi
+		if echo "$dtm $board $dtc" | grep -qiE 'avalon|cliffs' || [ "$soc" = SM7675 ]; then
+			ok "avalon / SM7675: OnePlus Nord 4 (devices/avalon)"
 		elif [ -n "$dtm$soc" ]; then
-			warn "not the reference platform ($soc)" "a port is a new devices/<name>/: devices/redwood/README.md; adb pull /sys/firmware/fdt and run tools/soc-args.py on it"
+			warn "not OnePlus Nord 4 ($soc)" "a port is a new devices/<name>/: devices/avalon/README.md; adb pull /sys/firmware/fdt and run tools/soc-args.py on it"
 		else
 			warn "could not read the device tree" "an adb shell may be restricted; try with root"
 		fi
@@ -144,9 +121,9 @@ else
 		fi
 		plain=$(A 'ls /vendor/firmware_mnt/image/modem.mdt 2>&1')
 		if echo "$plain" | grep -q '^/vendor/firmware_mnt/image/modem.mdt$'; then
-			ok "modem firmware is readable without root: devices/redwood/pull-firmware.sh works"
+			ok "modem firmware is readable without root: pull-firmware works"
 		elif [ "$root" = 1 ] && A 'su -c "ls /vendor/firmware_mnt/image/modem.mdt"' | grep -q modem.mdt; then
-			warn "the firmware is there but only root can read it" "use devices/redwood/pull-firmware-root.sh instead of pull-firmware.sh"
+			warn "the firmware is there but only root can read it" "pull with root staging"
 		else
 			warn "modem firmware not found under /vendor/firmware_mnt/image" "check the ROM's firmware layout (docs/windows.md)"
 		fi

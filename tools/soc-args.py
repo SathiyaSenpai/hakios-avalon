@@ -101,7 +101,7 @@ def aoss_mailbox(nodes):
     has a reg counts, and the mainline form is preferred when both are there."""
     for path, props in nodes.items():
         kinds = props.get('compatible', b'').split(b'\0')
-        if any(k.startswith(b'qcom,') and k.endswith(b'-aoss-qmp') for k in kinds):
+        if any(k == b'qcom,aoss-qmp' or (k.startswith(b'qcom,') and k.endswith(b'-aoss-qmp')) for k in kinds):
             address = reg_address(nodes, path)
             if address is not None:
                 return address
@@ -152,18 +152,24 @@ def main():
         if 'phandle' in props:
             by_phandle[u32(props['phandle'])] = (path, props)
 
-    def reserved(leaf, arg):
+    def reserved(leaf, arg, fallback=None, compat=None):
         path, _ = find_named(nodes, leaf)
+        if path is None and fallback is not None:
+            path, _ = find_named(nodes, fallback)
+        if path is None and compat is not None:
+            path, _ = find(nodes, compat)
         address(arg, reg_address(nodes, path))
 
-    reserved('cmd_db', 'soc_cmd_db')
-    reserved('mpss', 'soc_mpss_mem')
-    reserved('ipa_gsi', 'modem_ipa_fw_at')              # where the IPA's firmware is loaded (the ipa_gsi reservation)
-    _, smem = find(nodes, 'qcom,smem')
+    reserved('cmd_db', 'soc_cmd_db', fallback='aop_cmd_db_region', compat='qcom,cmd-db')
+    reserved('mpss', 'soc_mpss_mem', fallback='mpss_region')
+    reserved('ipa_fw_region', 'modem_ipa_fw_at', fallback='ipa_gsi')
+    smem_path, smem = find(nodes, 'qcom,smem')
     if smem and 'memory-region' in smem:
         target = by_phandle.get(u32(smem['memory-region']))
         if target:
             address('soc_smem', reg_address(nodes, target[0]))
+    elif smem:
+        address('soc_smem', reg_address(nodes, smem_path))
     path, _ = find(nodes, 'qcom,msm-imem')
     imem = reg_address(nodes, path)
     if imem is not None:

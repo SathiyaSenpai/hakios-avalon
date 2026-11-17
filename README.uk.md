@@ -2,31 +2,22 @@
 
 [English](README.md) · [中文](README.zh.md) · Українська
 
-**Відкрите ядро Darwin від Apple (XNU, xnu-8796.121.2) на Android-телефонах**, так само як Android — це Linux на телефонах: власний
-завантажувач, власні драйвери, власна система конфігурацій і власна версія. Те саме ядро працює в QEMU без нічого від Apple і без нічого
-з будь-якого телефона (`make qemu-open`). Це дослідницький стенд, а не прошивка: за замовчуванням усе працює з ОЗП, а перезавантаження
-повертає телефон в Android.
+**Відкрите ядро Darwin від Apple (XNU, xnu-8796.121.2) на OnePlus Nord 4 (`avalon`, Qualcomm SM7675 Cliffs)**: власний
+завантажувач, власні драйвери, U-Boot і власна система конфігурацій. Це дослідницький стенд, а не прошивка: за замовчуванням
+усе працює з ОЗП, а перезавантаження повертає телефон в Android.
 
-**Документація:** [docs/](docs/index.md) (англійською) і сайт [hackios-web.vercel.app](https://hackios-web.vercel.app).
-
-**Новини, 4 листопада 2026:** на POCO X5 Pro 5G віконний сервер малює через Metal на Adreno 642L, двома шляхами. hakios-metal: гортання
-сторінок 110–115 кадрів на секунду, прокручування в Settings 118, кнопка «додому» 106, рендер 828x1792, розтягнутий на панель; 101, близько 90 і близько 90 на повних 1125x2436. Metal поверх Vulkan від UniXNU: гортання 50–57, прокручування 41.
-Панель працює на 120 Гц, і **120 кадрів на секунду не досягнуто**. [Metal на Adreno](docs/reference/metal.md),
-[вимірювання](docs/reference/metal-measurements.md).
+**Документація:** [docs/](docs/index.md) (англійською).
 
 Почніть із [Getting started](docs/getting-started/index.md), [On the phone](docs/getting-started/phone.md) або
-[Port a device](docs/porting/index.md). Що працює, по частинах: [головна сторінка документації](docs/index.md#what-works).
+[Port a device](docs/porting/index.md). Стан підтримки OnePlus Nord 4 (`avalon`): [сторінка пристрою](docs/devices/avalon.md) та [головна сторінка документації](docs/index.md#what-works).
 
 ## Репозиторії
 
 | Репозиторій | Вміст |
 |---|---|
-| [hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel) | **спільний**: порт ядра, усі спільні драйвери, завантажувач, користувацький простір, інструменти, ця документація і `devices/qemu` |
+| `hakios-sm7675` | **OnePlus Nord 4 (`avalon`)**: порт ядра, драйвери, завантажувач, користувацький простір, інструменти, документація і `devices/avalon` |
 | [`hakios-metal/`](hakios-metal) | модель команд Metal на Adreno через драйвер GPU ядра |
-| [hakios-sm7325](https://github.com/oosexgang/hakios-sm7325) | POCO X5 Pro 5G: defconfig, стан, платформа UEFI, скрипт прошивок і шар його SoC (сімейство Qualcomm SC7280) |
-| [hakios-mt6768](https://github.com/oosexgang/hakios-mt6768) | Infinix Hot 20 (MediaTek Helio G85): експериментальний порт із власним завантажувачем. Його немає в маніфесті цього репозиторію |
-| [hakios-uefi](https://github.com/oosexgang/hakios-uefi) | прошивка, що запускає завантажувач: Mu-Silicium зі шляхом завантаження, банером і назвою HakiOS, а також U-Boot від HakiOS |
-| [hackios-web](https://github.com/oosexgang/hackios-web) | вебсайт |
+| [hakios-uefi](https://github.com/oosexgang/hakios-uefi) | прошивка, що запускає завантажувач (U-Boot від HakiOS) |
 | [hackios-xnu-userland](https://github.com/oosexgang/hackios-xnu-userland) | старий: вказівник, збережений заради посилань. Користувацький простір тепер у `userland/` тут |
 
 Як вони пов'язані: [репозиторії](docs/porting/repositories.md).

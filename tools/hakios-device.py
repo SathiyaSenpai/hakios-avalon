@@ -461,7 +461,7 @@ def main():
     p.add_argument("--soc", required=True, help="its SoC family: copied from a device or socs/ that has it, else a new layer; or none")
     p.add_argument("--soc-title", help="for a new SoC layer: what the family is called")
     p.add_argument("--repo", action="store_true", help="make the device's directory a git repository, ready to push")
-    p.add_argument("--title", required=True, help='what it is called ("POCO X5 Pro 5G")')
+    p.add_argument("--title", required=True, help='what it is called ("OnePlus Nord 4")')
     p.add_argument("--vendor", default="?")
     p.add_argument("--maintainer", default="?")
     tree = p.add_mutually_exclusive_group()

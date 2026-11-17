@@ -7,7 +7,7 @@
 Apple's XNU sources (the release Darwin userland 16.5 was built from) with this port laid over them:
 
 ```sh
-make redwood_defconfig   # or any device's defconfig; without a .config every driver is built
+make avalon_defconfig    # OnePlus Nord 4 configuration; without a .config every driver is built
 make kernel              # xnu/apply.sh (once), xnu-deps/setup.sh (once), then the build
 ```
 
@@ -42,8 +42,7 @@ make loader          # xnuloader/build.sh: clang and lld-link, an EFI applicatio
 ```
 
 The header `xnuloader/identity.h`, the properties by which Darwin tells which iPhone it is, is not kept in the repository:
-`xnuloader/mkidentity.sh` makes it at build time from the device tree in your own IPSW (`sysimage/unpack.sh` leaves it in `sysimage/`). `make loader-open` makes the placeholder
-loader that boots the open kernel only.
+`xnuloader/mkidentity.sh` makes it at build time from the device tree in your own IPSW (`sysimage/unpack.sh` leaves it in `sysimage/`). `make loader-open` makes the placeholder loader.
 
 ## User space and the images
 

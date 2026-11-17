@@ -4,7 +4,7 @@
 usage: tools/mkesp.py OUTDIR [PAYLOAD] [--loader FILE]
 
   OUTDIR   the tree to make (it must be empty or not exist): copy it to a FAT32 volume, or serve it to QEMU
-  PAYLOAD  the "XNUP" payload made by xnuloader/mkpayload.py (default: qemu/payload.bin, which `make qemu-open` makes)
+  PAYLOAD  the "XNUP" payload made by xnuloader/mkpayload.py (default: usb-payload.bin)
   --loader the boot loader (default: xnuloader/loader.efi, else prebuilt/loader.efi)
 
 What it makes:
@@ -51,7 +51,7 @@ def entries(data):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("outdir")
-    ap.add_argument("payload", nargs="?", default=os.path.join(ROOT, "qemu", "payload.bin"))
+    ap.add_argument("payload", nargs="?", default=os.path.join(ROOT, "usb-payload.bin"))
     ap.add_argument("--loader")
     args = ap.parse_args()
 

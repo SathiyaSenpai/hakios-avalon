@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build XNU for redwood on Linux. Extra make args are passed through.
+# Build XNU for OnePlus Nord 4 (avalon) on Linux. Extra make args are passed through.
 source "$(dirname "${BASH_SOURCE[0]}")/xnu-env.sh"
 cd "$XNU_SRC" || exit 1
 # The Wi-Fi driver's object (tools/mk-ath11k.sh) is linked into the kernel when it is there; make

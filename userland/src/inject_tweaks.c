@@ -35,6 +35,31 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+extern CFTypeRef MGCopyAnswer(CFStringRef key);
+
+static CFTypeRef
+my_MGCopyAnswer(CFStringRef key)
+{
+	if (key != NULL) {
+		if (CFEqual(key, CFSTR("marketing-name"))) {
+			return CFStringCreateCopy(kCFAllocatorDefault, CFSTR("OnePlus Nord 4 (avalon)"));
+		}
+		if (CFEqual(key, CFSTR("ModelNumber"))) {
+			return CFStringCreateCopy(kCFAllocatorDefault, CFSTR("CPH2661 (Port by sathiyasenpai)"));
+		}
+		if (CFEqual(key, CFSTR("UserAssignedDeviceName")) || CFEqual(key, CFSTR("DeviceName"))) {
+			return CFStringCreateCopy(kCFAllocatorDefault, CFSTR("OnePlus Nord 4"));
+		}
+	}
+	return MGCopyAnswer(key);
+}
+
+__attribute__((used)) static struct {
+	const void *ours, *theirs;
+} mg_interpose __attribute__((section("__DATA,__interpose"))) = {
+	(const void *)my_MGCopyAnswer, (const void *)MGCopyAnswer
+};
+
 /*
  * Both places a package may put a tweak: the one ElleKit uses now, and the one Cydia Substrate used,
  * which is a symbolic link to it on a phone -- but a package unpacked on this machine can leave it a

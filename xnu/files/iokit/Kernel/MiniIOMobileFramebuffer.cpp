@@ -32,6 +32,7 @@
 extern "C" {
 #include <console/video_console.h>
 extern struct vc_info vinfo;            /* the boot framebuffer, as the text console knows it */
+extern int disableConsoleOutput;
 }
 
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -1535,6 +1536,7 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
 				/* the first picture: the kernel's text console must stop drawing over it */
 				fGraphics = true;
 				PE_initialize_console(NULL, kPEGraphicsMode);
+				disableConsoleOutput = 1;
 			}
 			drawLayer(s, src, dst);
 			if (layer == 0) {
@@ -1979,7 +1981,7 @@ publishDisplayNode(void)
 		data = OSData::withBytes("display-subsystem", sizeof("display-subsystem"));
 		props->setObject("device_type", data);
 		OSSafeReleaseNULL(data);
-		data = OSData::withBytes("redwood,framebuffer", sizeof("redwood,framebuffer"));
+		data = OSData::withBytes("avalon,framebuffer", sizeof("avalon,framebuffer"));
 		props->setObject("compatible", data);
 		OSSafeReleaseNULL(data);
 		data = OSData::withBytes("disp0", sizeof("disp0"));

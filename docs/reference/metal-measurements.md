@@ -7,7 +7,7 @@ been reached**: not on hakios-metal, not on metal2vulkan, and not on OpenGL ES.
 
 | | |
 |---|---|
-| Phone | POCO X5 Pro 5G (`redwood`), SM7325 |
+| Phone | Reference Adreno 642L testbed |
 | GPU | Adreno 642L at 550 MHz, the most this phone's GPU is rated for (`adreno_speed=3`, the default) |
 | User space | the Darwin 16.5 user space, laid out from your own IPSW |
 | Panel | 1080 x 2400 at 120 Hz |
@@ -137,9 +137,7 @@ for a result.
 
 ## OpenGL ES, for comparison
 
-The default path, which is not Metal: Settings scrolled at 107 to 114 a second on the four big cores (`cpus=4`, `fb_hz=120 ca_vbl=1`,
-31 October, [hakios-sm7325](https://github.com/oosexgang/hakios-sm7325) `a8e7a87`). The conditions differ from the table above in the core count and in the day's kernel, so that is a reference point and not
-a comparison run.
+The default OpenGL ES path reference point (`fb_hz=120 ca_vbl=1`, `cpus=4`).
 
 ## Tearing
 

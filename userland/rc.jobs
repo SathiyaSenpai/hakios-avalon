@@ -1,9 +1,12 @@
 # Commands run by the launchd job com.hakios.demo (see com.hakios.demo.plist).
-/redwood/bin/hello_dyn started by launchd
-/redwood/bin/svc_test
-/redwood/bin/surf_test
+/avalon/bin/hello_dyn started by launchd
+/avalon/bin/svc_test
+/avalon/bin/surf_test
 /bin/ps -A
-/redwood/bin/mg_test
+/avalon/bin/mg_test
 # the processors: how many, and -- once the system has settled -- whether they work at the same time
-/redwood/bin/cpu_test
-/redwood/bin/cpu_test 240 &
+/avalon/bin/cpu_test
+# /avalon/bin/cpu_test 240 & (disabled to avoid overheating idle device)
+# "swipe up to open": disabled to verify true physical hardware touchscreen response
+# /avalon/bin/rwtouch wait 6 swipe 0.5 0.985 0.5 0.3 250 &
+# /avalon/bin/rwtouch wait 15 swipe 0.5 0.985 0.5 0.3 250 &

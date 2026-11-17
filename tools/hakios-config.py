@@ -4,15 +4,15 @@
 The way Linux does it (arch/arm64/configs/<device>_defconfig, scripts/kconfig/merge_config.sh, `make
 savedefconfig`), for a kernel whose options are not compiled in but given on its command line:
 
-  tools/hakios-config.py defconfig redwood            .config = configs/defconfig + configs/redwood_defconfig
-  tools/hakios-config.py defconfig redwood open       ... and the fragment configs/open.config on top
-  tools/hakios-config.py merge virt                   put a fragment over the .config there is
+  tools/hakios-config.py defconfig avalon             .config = configs/defconfig + configs/avalon_defconfig
+  tools/hakios-config.py defconfig avalon open        ... and the fragment configs/open.config on top
+  tools/hakios-config.py merge trace                  put a fragment over the .config there is
   tools/hakios-config.py args                         the kernel's boot-arguments for the .config
   tools/hakios-config.py check | show | needs         validate it; say what it is; which firmware it wants
   tools/hakios-config.py savedefconfig                the .config as a minimal defconfig (its differences from configs/defconfig)
   tools/hakios-config.py list | help SYMBOL           what configs/ holds; what a symbol means
 
-`make redwood_defconfig` and `make config` call it.
+`make avalon_defconfig` and `make config` call it.
 
 A symbol CONFIG_GPU=y is the boot-argument gpu=1; CONFIG_CPUS=8 is cpus=8; CONFIG_MODEM_BUFFER=0xa8000000 is
 modem_buffer=0xa8000000. A symbol that is "not set" is left out of the command line (the kernel's own default
@@ -46,7 +46,7 @@ class ConfigError(Exception):
 # kinds: bool (y/n, becomes arg=1), int, hex, str, and meta (a fact about the build, not an argument)
 SYMBOLS = [
     ("DEVICE", "meta", None, "the directory of the phone under devices/ this configuration is for", None, None),
-    ("SOC", "meta", None, "the SoC family (sc7280: SM7325, QCM6490); it is part of the kernel's version string", None, None),
+    ("SOC", "meta", None, "the SoC family (cliffs: SM7675); it is part of the kernel's version string", None, None),
     ("FIRMWARE", "meta", None, "\"device\": options may use firmware pulled from your own phone (fw-*/); \"none\": the open "
                                "configuration, nothing of the phone's own is loaded", None, None),
     ("CPUS", "int", "cpus", "CPU cores the kernel uses, 1 to 8; one if not set", None, None),
@@ -455,7 +455,7 @@ def overlay(config, files):
 def expand(root, path, seen=()):
     """`path` preceded by the files it includes: a line `#include NAME` in a defconfig or fragment (a comment to every other
     reader) stands for configs/NAME, NAME_defconfig or NAME.config, laid first. This is how a device's defconfig is the common one
-    plus its SoC's and its own (the way Android's build.config puts a kernel's configuration together), and it is why redwood_defconfig
+    plus its SoC's and its own (the way Android's build.config puts a kernel's configuration together), and it is why avalon_defconfig
     is three lines."""
     if path in seen:
         raise ConfigError("%s includes itself (%s)" % (rel(root, path), " -> ".join(os.path.basename(p) for p in seen + (path,))))

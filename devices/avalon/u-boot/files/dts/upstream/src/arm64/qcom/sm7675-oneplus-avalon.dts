@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * The OnePlus Nord 4 (avalon, SM7675) for HakiOS's U-Boot.
+ *
+ * Only what U-Boot needs: simple-framebuffer for display, payload memory carve-out,
+ * keys, UFS storage controller and USB.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/arm/qcom,ids.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+#include "sm8650.dtsi"
+#include "pm8550.dtsi"
+#include "pm8550b.dtsi"
+#include "pmk8550.dtsi"
+
+/ {
+	model = "OnePlus Nord 4";
+	compatible = "oneplus,avalon", "qcom,sm7675";
+	chassis-type = "handset";
+
+	qcom,msm-id = <614 0x10000>, <557 0x10000>;
+	qcom,board-id = <0 0>;
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Continuous splash framebuffer left by ABL at 0xe3940000 (1240 x 2772, 32 bpp) */
+		framebuffer0: framebuffer@e3940000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xe3940000 0x0 (1240 * 2772 * 4)>;
+			width = <1240>;
+			height = <2772>;
+			stride = <(1240 * 4)>;
+			format = "a8r8g8b8";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		pinctrl-0 = <&volume_up_n>;
+		pinctrl-names = "default";
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&pm8550_gpios 6 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+		};
+	};
+
+	reserved-memory {
+		hakios_payload_mem: hakios-payload@f0000000 {
+			reg = <0x0 0xf0000000 0x0 0x4000000>;
+		};
+	};
+};
+
+&pm8550_gpios {
+	volume_up_n: volume-up-n-state {
+		pins = "gpio6";
+		function = "normal";
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+&pon_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
+};
+
+&ufs_mem_hc {
+	status = "disabled";
+};
+
+&ufs_mem_phy {
+	status = "disabled";
+};
+
+&usb_1 {
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	phys = <&usb_1_hsphy>;
+	phy-names = "usb2-phy";
+	status = "okay";
+};
+
+&usb_1_hsphy {
+	status = "okay";
+};
+

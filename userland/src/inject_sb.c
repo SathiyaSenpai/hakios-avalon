@@ -733,7 +733,7 @@ battery_post_notifications(void)
 
 /* ---- the lock screen's clock without a GPU ------------------------------------------------------- */
 
-#define HAKIOS_GL "/redwood/lib/libhakios.gl.dylib"
+#define HAKIOS_GL "/avalon/lib/libhakios.gl.dylib"
 
 /* Does the window server draw with OpenGL ES? The same question, asked the same way, as opengl_es() in inject.c. */
 static bool
@@ -745,7 +745,8 @@ gpu_draws(void)
 	io_service_t gpu;
 
 	/* ... or through Metal (boot-arg metal=1 with the GPU kept: HakiosMetal.bundle, an image built with METAL_PLUGIN) */
-	if (access("/redwood/lib/HakiosMetal.bundle/HakiosMetal", R_OK) == 0 &&
+	if ((access("/avalon/lib/HakiosMetal.bundle/HakiosMetal", R_OK) == 0 ||
+	     access("/redwood/lib/HakiosMetal.bundle/HakiosMetal", R_OK) == 0) &&
 	    sysctlbyname("kern.bootargs", arguments, &size, NULL, 0) == 0) {
 		for (argument = arguments; (argument = strstr(argument, "metal=")) != NULL; argument += 6) {
 			if ((argument == arguments || argument[-1] == ' ') && argument[6] != '0') {
@@ -1396,21 +1397,21 @@ status_bar_fallback_is_split(void)
 	}
 	while (depth-- > 0) {
 		unsigned count = 0;
-		Method *methods = class_copyMethodList(object_getClass(chain[depth]), &count);
+		Method *methods = class_copyMethodList(object_getClass((id)chain[depth]), &count);
 
 		for (unsigned i = 0; i < count; i++) {
 			const char *name = sel_getName(method_getName(methods[i]));
 
 			if (strcmp(name, "load") != 0 && strcmp(name, "initialize") != 0 && strcmp(name, "alloc") != 0 && strcmp(name, "allocWithZone:") != 0) {
-				class_replaceMethod(object_getClass(fallback), method_getName(methods[i]), method_getImplementation(methods[i]),
+				class_replaceMethod(object_getClass((id)fallback), method_getName(methods[i]), method_getImplementation(methods[i]),
 				    method_getTypeEncoding(methods[i]));
 				moved++;
 			}
 		}
 		free(methods);
 	}
-	class_replaceMethod(object_getClass(fallback), sel_registerName("alloc"), (IMP)status_bar_fallback_alloc, "@16@0:8");
-	class_replaceMethod(object_getClass(fallback), sel_registerName("allocWithZone:"), (IMP)status_bar_fallback_alloc_zone, "@24@0:8^v16");
+	class_replaceMethod(object_getClass((id)fallback), sel_registerName("alloc"), (IMP)status_bar_fallback_alloc, "@16@0:8");
+	class_replaceMethod(object_getClass((id)fallback), sel_registerName("allocWithZone:"), (IMP)status_bar_fallback_alloc_zone, "@24@0:8^v16");
 	say("hakios: SpringBoard: the status bar's fallback provider is %s from now on (%u class methods)\n", class_getName(status_bar_split), moved);
 }
 
@@ -2059,7 +2060,7 @@ accessibility_settings(void)
  * Open the tweak loader of the package manager's prefix, when there is one. Nothing here depends on
  * it: without a prefix (or without ElleKit in it) the file is not there and this does nothing.
  */
-#define HAKIOS_TWEAK_LOADER    "/redwood/lib/libhakios.tweaks.dylib"
+#define HAKIOS_TWEAK_LOADER    "/avalon/lib/libhakios.tweaks.dylib"
 
 static void
 load_tweaks(void)
@@ -2115,6 +2116,28 @@ caenv(void)
 	}
 }
 
+static BOOL
+sb_never_pocket(__unused id self, __unused SEL selector)
+{
+	return NO;
+}
+
+static void
+sb_sensor_mode_fixes(void)
+{
+	Class cls = objc_getClass("BKSHIDUISensorMode");
+	if (cls != NULL) {
+		class_replaceMethod(cls, sel_registerName("pocketTouchesExpected"), (IMP)sb_never_pocket, "B@:");
+		class_replaceMethod(cls, sel_registerName("isPocketTouchesExpected"), (IMP)sb_never_pocket, "B@:");
+	}
+	Class acls = objc_getClass("SBHIDUISensorModeAssertion");
+	if (acls != NULL) {
+		class_replaceMethod(acls, sel_registerName("pocketTouchesExpected"), (IMP)sb_never_pocket, "B@:");
+		class_replaceMethod(acls, sel_registerName("isPocketTouchesExpected"), (IMP)sb_never_pocket, "B@:");
+	}
+	say("hakios: SpringBoard: pocketTouchesExpected suppressed\n");
+}
+
 __attribute__((constructor))
 static void
 hakios_springboard_init(void)
@@ -2160,6 +2183,7 @@ hakios_springboard_init(void)
 	    0x1f1c91480UL, (IMP)snapshot_output_format);
 	plain_vibrancy();
 	ui_lite();
+	sb_sensor_mode_fixes();
 	wallpaper_cache();
 	status_bar_fallback_is_split();
 	wallpaper_freeze();
@@ -2260,6 +2284,14 @@ hakios_springboard_init(void)
 		if (device && class_getInstanceMethod(object_getClass(device), monitoring)) {
 			((void (*)(id, SEL, BOOL))objc_msgSend)(device, monitoring, YES);
 		}
+		Class uiapp = objc_getClass("UIApplication");
+		SEL shared = sel_registerName("sharedApplication");
+		SEL set_idle = sel_registerName("setIdleTimerDisabled:");
+		id app = uiapp ? ((id (*)(Class, SEL))objc_msgSend)(uiapp, shared) : nil;
+		if (app && class_getInstanceMethod(object_getClass(app), set_idle)) {
+			((void (*)(id, SEL, BOOL))objc_msgSend)(app, set_idle, YES);
+			say("hakios: SpringBoard: idle timer disabled (screen stays awake)\n");
+		}
 		watch_main_loop();
 		{
 			char arguments[1024] = "";
@@ -2305,7 +2337,10 @@ hakios_springboard_init(void)
 			return;
 		}
 	}
-	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+		unlock();
+	});
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
 		unlock();
 	});
 }

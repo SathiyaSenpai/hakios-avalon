@@ -4,7 +4,7 @@ An Android kernel says `5.4.147-android12-9-...-g1a2b3c4d`: the Linux it is buil
 commit. This kernel says the same kind of thing about itself:
 
 ```
-2.3.4-hakios-darwin22.5-sc7280-g1a2b3c4d[-dirty]
+2.3.4-hakios-darwin22.5-cliffs-g1a2b3c4d[-dirty]
 │ │  │  │      │          │      └ the commit; "-dirty" if a tracked file differs from it
 │ │  │  │      │          └ the SoC family the configuration is for (CONFIG_SOC)
 │ │  │  │      └ the Darwin it is built on (22.5.0, Apple's open xnu-8796.121.2)
@@ -31,7 +31,7 @@ in an Android kernel next to the vendor's own string.
 string from it, from `CONFIG_SOC` of the `.config` (see [configs.md](configs.md)) and from git:
 
 ```bash
-tools/kernel-version.py            # 2.3.4-hakios-darwin22.5-sc7280-g1a2b3c4d (the -sc7280 part is there with a .config)
+tools/kernel-version.py            # 2.3.4-hakios-darwin22.5-cliffs-g1a2b3c4d (the -cliffs part is there with a .config)
 tools/kernel-version.py --short    # 2.3.4
 tools/kernel-version.py --release  # 2.3.4-hakios: what a tag is called (v2.3.4-hakios)
 tools/kernel-version.py --all      # every part, for a build log
@@ -59,7 +59,7 @@ A boot-argument that is removed or changes its meaning is a **VERSION** change, 
 ## Honest limits
 
 - The number says which source the kernel was built from. It does not say that any given phone boots it; what has
-  been seen to boot is in the README's status table and in [port-pkg110.md](port-pkg110.md).
+  been seen to boot is in [the device page](devices/avalon.md) and the status table.
 - `-dirty` means a tracked file differs from the commit. A build from a modified tree says so.
 - `Darwin 22.5` is a name for the open-source xnu release the kernel is built on. The kernel is not Apple's `kernel`
   and is not Darwin's.

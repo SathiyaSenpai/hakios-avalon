@@ -20,9 +20,7 @@ This supersedes the summary in `NOTICE`, which stays as the short, canonical lis
 | metal2vulkan patch | `tools/m2v/metal2vulkan-hakios.patch` | changes to steelbrain/metal2vulkan, HakiOS | GPL-2.0-or-later OR LGPL-3.0-or-later, as the code it changes; **not MIT** | patch only, and its context lines are their code. The file carries no notice of its own: **to verify** that this is enough |
 | The window server's Metal plug-in | `userland/src/HakiosMetalCA.m` | begun from vcvkk's `userland/src/HakiosMetal.m` (github.com/vcvkk/darwin-redwood, branch hakios-workspace, at eb9fdf5), with this tree's changes | **to verify**: that repository states no license (read 2026-11-04); this tree's changes are MIT | not in `prebuilt/` |
 | AIR / Metal-library tooling | `tools/mesa/air/` | HakiOS (Darwin on redwood contributors) | MIT | our own; LLVM bitcode layout is a published format |
-| mkbootimg.py | `devices/redwood/prebuilt/mkbootimg.py` | Android Open Source Project | Apache-2.0 | |
-| Mu-Silicium / Project Mu derived files | `devices/redwood/uefi/` | Project Silicium, Microsoft, contributors | BSD-2-Clause-Patent; some GPL-2.0+ OR MIT | derived parts keep upstream license |
-| Qualcomm/Xiaomi UEFI driver binaries | `devices/redwood/uefi/files/Binaries/` | Qualcomm / Xiaomi (from device `xbl.img`) | vendor's — **to verify** | needed only to rebuild UEFI; removable, re-extract with UEFIReader |
+| mkbootimg.py | `devices/avalon/prebuilt/mkbootimg.py` | Android Open Source Project | Apache-2.0 | |
 | FocalTech touch firmware header | `drivers/input/hakios.focaltech_fw.h` | FocalTech (device firmware blob) | vendor's — **to verify** | candidate to move to pull-from-device |
 | Apple host headers (build only) | `xnu-deps/hostinc/mach-o/`, `.../mach/` | Apple (open-source cctools/xnu headers) | APSL 2.0 | host-side Mach-O headers for the cross build |
 | Pre-built kernel & user space | `prebuilt/` | built from this repo | APSL 2.0 / MIT (as source) | reproducible from source here |
@@ -46,7 +44,7 @@ This supersedes the summary in `NOTICE`, which stays as the short, canonical lis
 | Rust's standard library (M2V=1) | the Rust 1.98 toolchain, target `aarch64-apple-ios` | the Rust project | MIT OR Apache-2.0 |
 | QuartzCore's `default.metallib` for the window server's Metal | `tools/ca-metallib.py`, from your own Mac or a later system's IPSW (`CA_QC_METALLIB=`) | Apple | Apple's: user supplies; the result stays on your machine and is never committed |
 | Procursus / Sileo packages | `tools/mk-jb.sh` | Procursus team | their own licenses |
-| Phone firmware (GPU, Wi-Fi, DSP, modem, haptics, cameras) | `devices/redwood/pull-firmware.sh` | Qualcomm / Xiaomi | vendor's — user's own device |
+| Phone firmware (GPU, Wi-Fi, DSP, modem, haptics, cameras) | `devices/avalon/pull-firmware.sh` | Qualcomm / OnePlus | vendor's — user's own device |
 
 ## A binary built with `M2V=1`: to verify
 

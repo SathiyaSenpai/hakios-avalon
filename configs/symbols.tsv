@@ -52,10 +52,13 @@ APPLOG	arg	applog	CPU, memory and boot	k	(patch)
 APPLOG_NAME	arg	applog_name	CPU, memory and boot	k	(patch)	
 AUTOUNLOCK	arg	autounlock	User space	u	inject_sb.c	
 BATTERY	arg	battery	Audio and battery	kl	hakios.adsp.c,hakios.battery.c,loader.c	
+BATTERY_DEBUG	arg	battery_debug	Audio and battery	k	hakios.battery.c	
 BATTMGR	arg	battmgr	Audio and battery	k	hakios.adsp.c	every property once, for the log (which number is which on this phone's firmware)
-BT	arg	bt	User space	k	hakios.bt.c	
-BT_AGAIN	arg	bt_again	User space	k	hakios.bt.c	the second look this many seconds later (0: no second look; 30)
+BT	arg	bt	User space	k	hakios.bt.c	Read-only survey: TLMM pins (plus UART pins), SPMI BT rails, cmd-db addresses, GCC clocks
+BT_AGAIN	arg	bt_again	User space	k	hakios.bt.c	Seconds until second pin look in bt=1 mode (0: none; default 30)
 BUTTONS	arg	buttons	Touch and buttons	k	hakios.buttons.c	
+BUTTONS_CLIFFS	arg	buttons_cliffs	Touch and buttons	k	hakios.buttons.c	
+BUTTONS_DEBUG	arg	buttons_debug	Touch and buttons	k	hakios.buttons.c	
 BUTTONS_STEPS	arg	buttons_steps	Touch and buttons	k	hakios.buttons.c	
 CA_METALLIB	arg	ca_metallib	User space	u	inject.c	
 CA_PROF	arg	ca_prof	User space	u	HakiosMetalCA.m	
@@ -74,6 +77,9 @@ CAM_SETTLE	arg	cam_settle	Cameras	k	hakios.camera.c
 CAM_SHUTTER	arg	cam_shutter	Cameras	k	hakios.camera.c	
 CAM_VBLANK	arg	cam_vblank	Cameras	k	hakios.camera.c	
 CC_FADE	arg	cc_fade	User space	u	inject_sb.c	
+CPUFREQ_CLIFFS	arg	cpufreq_cliffs	CPU, memory and boot	k	hakios.cpufreq.c	
+CPUFREQ_MAX_MHZ	arg	cpufreq_max_mhz	CPU, memory and boot	k	hakios.cpufreq.c	
+CPUFREQ_TURBO	arg	cpufreq_turbo	CPU, memory and boot	k	hakios.cpufreq.c	
 CPULOAD	arg	cpuload	CPU, memory and boot	k	hakios.cpufreq.c	every MS milliseconds, how busy each of our cores was meanwhile, in percent, to the loader's log (tools/frames.py shows it per gesture)
 CPUMASK	arg	cpumask	Loader	l	loader.c	
 DDR	arg	ddr	CPU, memory and boot	k	hakios.cpufreq.c	the memory's bus clock managers ("BCM") in the command database the boot loader left, with what is needed to vote for bandwidth on them -- only read
@@ -197,8 +203,10 @@ MODEM_SHARE_TEST	arg	modem_share_test	Cellular	k	hakios.mpss.c
 MODEM_SIM_PROBE_OFF	arg	modem_sim_probe_off	Cellular	k	hakios.mpss.c	
 MODEM_SIM_SWITCH_OFF	arg	modem_sim_switch_off	Cellular	k	hakios.mpss.c	
 MODEM_STEP	arg	modem_step	Cellular	k	hakios.mpss.c	the steps once the root is there, then back to the loader if modem_return=1 says so
+MODEM_VERBOSE	arg	modem_verbose	Cellular	k	hakios.mpss.c	
 MODEM_WAIT	arg	modem_wait	Cellular	k	hakios.mpss.c	
 MODEM_WDA_OFF	arg	modem_wda_off	Cellular	k	hakios.mpss.c	
+PMIC_CLIFFS	arg	pmic_cliffs	Chip, thermal and PMIC	k	hakios.pmic.c	
 PMIC_LIST	arg	pmic_list	Chip, thermal and PMIC	k	hakios.pmic.c	only the clock, not the inventory of every block
 PRESS_POWER	arg	press_power	Touch and buttons	k	hakios.buttons.c	a short press of the power key that many seconds after boot, and another ten seconds later, given to Darwin as the key's own are (hakios_touch_post):
 PRESS_POWER_MS	arg	press_power_ms	Touch and buttons	k	hakios.buttons.c	
@@ -219,17 +227,18 @@ ROOT_APFS	arg	root_apfs	User space	u	init.c	the root is to be the Darwin root vo
 SERIAL	arg	serial	Loader	l	loader.c	
 SMALL_CORES	arg	small_cores	CPU, memory and boot	k	(patch)	
 SMALL_CORES_AFTER	arg	small_cores_after	CPU, memory and boot	k	GenericARMPE.cpp	
+SOC	arg	soc	GPU and display	kl	hakios.adreno.c,hakios.adsp.c,hakios.battery.c,hakios.bt.c,hakios.goodix.c,hakios.ipa.c,hakios.mpss.c,hakios.s3910.c,hakios.thermal.c,hakios.wifi.c,loader.c	
 SOC_CMD_DB	hex	soc_cmd_db	Cellular	k	hakios.mpss.c	
-SOC_GSI_BASE	hex	soc_gsi_base	Cellular	k	hakios.ipa.c	
+SOC_GSI_BASE	hex	soc_gsi_base	Cellular	k	hakios.ipa.c,hakios.mpss.c	
 SOC_IMEM	hex	soc_imem	Cellular	k	hakios.mpss.c	
-SOC_IPA_BASE	hex	soc_ipa_base	Cellular	k	hakios.ipa.c	
+SOC_IPA_BASE	hex	soc_ipa_base	Cellular	k	hakios.ipa.c,hakios.mpss.c	
 SOC_IPA_FW	arg	soc_ipa_fw	Cellular	k	hakios.mpss.c	
 SOC_IPA_STREAM	arg	soc_ipa_stream	Cellular	k	hakios.mpss.c	
 SOC_IPA_STREAM_UC	arg	soc_ipa_stream_uc	Cellular	k	hakios.mpss.c	
 SOC_MPSS_MEM	hex	soc_mpss_mem	Cellular	k	hakios.mpss.c	
 SOC_PAS_IPA	arg	soc_pas_ipa	Cellular	k	hakios.mpss.c	
 SOC_PAS_MPSS	arg	soc_pas_mpss	Cellular	k	hakios.mpss.c	
-SOC_SMEM	hex	soc_smem	Cellular	k	hakios.mpss.c,hakios.socinfo.c	where SMEM is (also the modem driver's argument; 0x80900000 on the reference phone)
+SOC_SMEM	hex	soc_smem	GPU and display	kl	hakios.adreno.c,hakios.adsp.c,hakios.battery.c,hakios.bt.c,hakios.buttons.c,hakios.cpufreq.c,hakios.goodix.c,hakios.haptic.c,hakios.ipa.c,hakios.mpss.c,hakios.pmic.c,hakios.s3910.c,hakios.socinfo.c,hakios.thermal.c,hakios.wifi.c,loader.c	where SMEM is (also the modem driver's argument; 0x80900000 on the reference phone)
 SOC_SMEM_SIZE	hex	soc_smem_size	Chip, thermal and PMIC	k	hakios.socinfo.c	
 SOUND_BELOW	arg	sound_below	Audio and battery	k	hakios.sound.c	
 SOUND_GAIN	arg	sound_gain	Audio and battery	k	hakios.sound.c	
@@ -245,16 +254,22 @@ SWITCHER_WALLPAPER	arg	switcher_wallpaper	User space	u	inject_sb.c
 SYSSLEEP	arg	syssleep	CPU, memory and boot	k	(patch)	
 SYSTRACE	arg	systrace	CPU, memory and boot	k	(patch),user_exception_trace.c	
 SYSTRACE_NAME	arg	systrace_name	CPU, memory and boot	k	(patch)	
+THERMAL_CLIFFS	arg	thermal_cliffs	Chip, thermal and PMIC	k	hakios.thermal.c	
 THERMAL_LOG	arg	thermal_log	Chip, thermal and PMIC	k	hakios.thermal.c	a summary line this often (0: only on a rise; 60)
 THERMAL_TM0	arg	thermal_tm0	Chip, thermal and PMIC	k	hakios.thermal.c	
 THERMAL_TM1	arg	thermal_tm1	Chip, thermal and PMIC	k	hakios.thermal.c	
+THERMAL_TM2	arg	thermal_tm2	Chip, thermal and PMIC	k	hakios.thermal.c	
 TORCH	arg	torch	Haptics and torch	kl	hakios.torch.c,loader.c	a look, reading only: the arbiter's channel for the module and who may write through it, the module's type, its registers, the PMIC's temperature
 TORCH_MAX_S	arg	torch_max_s	Haptics and torch	k	hakios.torch.c	
 TORCH_SECS	arg	torch_secs	Haptics and torch	k	hakios.torch.c	
+TOUCH_DEBUG	arg	touch_debug	Touch and buttons	k	hakios.s3910.c	
+TOUCH_EXIT	arg	touch_exit	Touch and buttons	k	hakios.input.c	
 TOUCH_FLIP	arg	touch_flip	Touch and buttons	k	hakios.goodix.c	
 TOUCH_LAT	arg	touch_lat	GPU and display	ku	HakiosMetalCA.m,MiniIOMobileFramebuffer.cpp,eagl.c,hakios.goodix.c,hakios.gpu.cpp,hakios.input.c,inject.c,inject_sb.c	a line for every wait of a program's for the GPU that took a millisecond or more ("tl: f KIND US at US"), for telling apart what holds a frame up
-TOUCH_POLL_US	arg	touch_poll_us	Touch and buttons	k	hakios.goodix.c	
+TOUCH_POLL_MS	arg	touch_poll_ms	Touch and buttons	k	hakios.s3910.c	
+TOUCH_POLL_US	arg	touch_poll_us	Touch and buttons	k	hakios.goodix.c,hakios.s3910.c	
 TOUCH_RATE	arg	touch_rate	Touch and buttons	k	hakios.goodix.c	the chip reports twice as often (Xiaomi's game mode; 240 otherwise)
+TOUCH_S3910	arg	touch_s3910	Touch and buttons	k	hakios.s3910.c	
 TOUCH_SPI_HZ	arg	touch_spi_hz	Touch and buttons	k	hakios.goodix.c	the bus at N Hz (Android's device tree gives the chip 5 MHz)
 TU_DEBUG	arg	tu_debug	User space	u	HakiosMetalCA.m	Turnip's TU_DEBUG in the window server (sysmem, gmem, forcebin, ...)
 UFS_BENCH	arg	ufs_bench	Storage and APFS	k	hakios.ufs.c	what one request through the loader costs, by size

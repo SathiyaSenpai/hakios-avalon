@@ -24,7 +24,7 @@ xnu-deps/setup.sh        # dependencies, mig/unifdef/tcsh, the SDK overlay, two 
 ```
 
 The kernel: `hakios-kernel` at the top of the repository (`make kernel` copies it there from XNU's `xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837`).
-`./xl run` and `qemu/run-darwin.sh` take it from there (`prebuilt/` only when it is missing).
+`./xl run` and `tools/boot-avalon.sh` take it from there (`prebuilt/` only when it is missing).
 
 Things to know:
 
@@ -37,7 +37,7 @@ Things to know:
 - A driver can be edited in `drivers/<subsystem>/`: `make kernel` runs `xnu/sync-drivers.sh`, which copies it into
   the tree when it is newer than the tree's copy (never the other way round). Everything else, and drivers edited
   in the tree, go back with `xnu/export.sh`.
-- Edit `xnu-src/xnu-8796.121.2` directly (a git tree on branch `redwood`); `xnu/export.sh`
+- Edit `xnu-src/xnu-8796.121.2` directly; `xnu/export.sh`
   regenerates the patch and `files/` from the whole tree, so bring the tree up to the current patch
   first if somebody else changed the kernel meanwhile.
 

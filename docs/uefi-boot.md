@@ -14,7 +14,7 @@ only when there is none.
 | Way | How | Where | Checked |
 |---|---|---|---|
 | `fastboot boot` | `./xl enter`: a boot image holding Project Silicium's UEFI, a shim and the payload; the shim copies the payload to `0xF0000000` | the phone | yes: the loader started on the attached phone, its banner was read back from the screen and from the log |
-| a loader device | QEMU's `-device loader` puts the payload at `0xF0000000` (`make qemu-open`) | QEMU | yes |
+| payload in RAM | U-Boot or UEFI puts the payload at `0xF0000000` | phone | yes |
 | **a file of the volume** | the loader opens the volume it was started from and reads `\EFI\hakios\payload.bin` itself | any UEFI that starts the loader from a volume | **in QEMU only** (AAVMF) |
 
 ## The volume
@@ -32,8 +32,7 @@ FAT32 volume, or serve it to QEMU.
 ## Try it (QEMU, nothing of Apple's closed software: `make doctor` first)
 
 ```sh
-make qemu-open                    # builds the kernel, the open loader, hello, and boots them (the payload device)
-QEMU_ESP=1 qemu/run.sh 90         # the same payload, but as the file \EFI\hakios\payload.bin: no loader device
+make avalon_defconfig             # configure for OnePlus Nord 4
 make esp                          # the tree for a real volume: build/esp
 ```
 

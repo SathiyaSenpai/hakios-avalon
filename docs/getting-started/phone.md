@@ -1,6 +1,6 @@
 # On the phone
 
-The phone with a port today is the **POCO X5 Pro 5G** (`redwood`, Snapdragon 778G): [its page](../devices/redwood.md). Another
+The supported device is the **OnePlus Nord 4** (`avalon`, SM7675 Cliffs): [its page](../devices/avalon.md). Another
 phone needs a port first: [Port a device](../porting/index.md).
 
 ## What happens to the phone
@@ -14,18 +14,15 @@ that you create yourself, and nowhere else. [What is written, exactly](../concep
 
 - the phone, its boot loader unlocked;
 - `adb` and `fastboot` on the PC (Google's platform-tools; on Windows, see [Windows](../windows.md));
-- the images of [Darwin in QEMU](qemu.md#darwin-in-qemu) (`userland/system.apfs`), and `make loader` done once;
-- the phone's own firmware, pulled from it (below). It is the vendor's and is never in the repositories.
-- the firmware that starts the loader: HakiOS's U-Boot (`make u-boot`, open source only: [U-Boot](../u-boot.md)), or
-  Silicium's UEFI built with your phone's own vendor drivers (`uefi/README.md`). `xl` takes Silicium's when it is built, else
-  U-Boot's (`XL_FIRMWARE=` to choose). Either is started from RAM.
+- the user space images (`userland/root.apfs` and `userland/system.apfs`) built via `userland/build.sh` from your own IPSW, and `make loader` done once;
+- the phone's own firmware, pulled from your vendor dump or phone (`devices/avalon/pull-firmware.sh`). It is never in the repositories.
+- HakiOS's U-Boot (`devices/avalon/prebuilt/u-boot.bin`, [U-Boot](../u-boot.md)), booted from RAM via `fastboot boot` (never flashed).
 
 ## Step by step
 
 ```sh
-tools/hakios-device.py sync         # hakios-sm7325 (with its SoC layer) and hakios-uefi into devices/ and uefi/
-devices/redwood/pull-firmware.sh    # Android running, on adb: GPU, Wi-Fi, audio, haptics, modem, cameras -> fw-*/
-make redwood_defconfig              # the phone's configuration: the common kernel, the SC7280's, the phone's own
+devices/avalon/pull-firmware.sh     # optional: extract S3910 touch & GPU firmware -> fw-*/
+make avalon_defconfig               # the phone's configuration: common, cliffs, avalon
 make config                         # what it is: the drivers built in, the kernel's arguments, the firmware it wants
 make phone SECS=600                 # a 10-minute session with the .config's arguments
 ```
@@ -49,24 +46,20 @@ A configuration sets them for you (`CONFIG_GPU=y` is `gpu=1`); [every argument](
 
 | Argument | What it does |
 |---|---|
-| `cpus=8 bootcpu=7 cpufreq=1` | all eight cores, the biggest one at full speed |
-| `touchscreen=1` | the touch screen and the buttons |
-| `gpu=1` | rendering on the Adreno (an image built with `GL=1`, firmware in `fw-gpu/`) |
-| `adsp=1 sound=4 mic=4` | the audio DSP: speakers, microphone; the battery's level comes with it |
-| `haptic=5` | the vibration motor |
-| `wifi=1` | Wi-Fi (the network from `fw-wifi/network`) |
-| `cam=5` | the cameras |
-| `modem=1` | the modem: its firmware, file systems, data path, SIM ([cellular](../cellular.md)) |
+| `cpus=8 bootcpu=7 cpufreq=1` | all eight Kryo cores, X4 prime core (CPU 7) at speed |
+| `touchscreen=1 touch_s3910=1` | Synaptics S3910 SPI touchscreen and hardware buttons |
+| `fb_hz=120 fbscale=2 ca_vbl=1` | 120 Hz display pacing and `2x` display scaling (`1240x2772` panel) |
+| `haptic=5` | Awinic AW86927 LRA vibration motor (`0x5a`) |
+| `battery=1` | BQ28Z610 I2C fuel gauge probe with `powerd` fallback |
 | `var_store=1 ufs_write=1` | keep `/private/var` across reboots (**writes** to the partition `darwin`) |
-| `thermal=1` | read the temperatures (the SC7280's fragment sets it), and hand back to the loader at 105 °C: the driver's own default, `thermal_stop=N` for another limit, `thermal_stop=0` for none |
+| `thermal=1 thermal_stop=95` | read 35 TSENS v2 sensors across 3 blocks (`thermal_stop=95` hands back to loader at 95 °C) |
 | `battery_stop=15` | hand back to the loader before the battery is flat |
-
 ## When something goes wrong
 
 | You see | Do |
 |---|---|
 | a session that does not end | `./xl` leaves its log in `logs/` and brings the phone back from the boot loader, or tells you which keys to press |
-| the phone getting hot | with `thermal=1` (the SC7280's fragment sets it) the run is handed back to the loader at 105 °C; `thermal_stop=N` changes the limit. Seen on the phone, 27 October 2026: `thermal: ... stop at 105 C` |
+| the phone getting hot | with `thermal=1` (`avalon.config` sets `thermal_stop=95`) the run is handed back to the loader at 95 °C; `thermal_stop=N` changes the limit |
 | a run left alone on battery | `battery_stop=<percent>` ends it before the battery is flat |
 | a problem in `make config` | it names the symbol and why: a driver left out that an argument needs, firmware the open profile does not load |
 | anything else | the log in `logs/`, and `make doctor` with the phone on `adb` |

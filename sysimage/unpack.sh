@@ -40,6 +40,10 @@ if [ "$size" != 6165698198 ] && [ -z "${ANY_IPSW:-}" ]; then
 	exit 1
 fi
 cd "$(dirname "$0")"
+echo "=========================================================="
+echo " HakiOS Darwin Extraction: Port for OnePlus Nord 4 (avalon)"
+echo " Maintainer / Port by: sathiyasenpai"
+echo "=========================================================="
 ROOTFS_DMG=096-04088-077.dmg                    # the root filesystem, APFS
 CRYPTEX_DMG=096-04666-078.dmg                   # the OS cryptex: dyld shared cache and a few libraries
 APP_CRYPTEX_DMG=096-03536-083.dmg               # the App cryptex (BuildManifest: Cryptex1,AppOS)
@@ -125,3 +129,4 @@ fi
 # --- the device tree, for xnuloader/mkidentity.sh -----------------------------------------------
 [ -f DeviceTree.d22ap.im4p ] || python3 ipsw-member.py "$IPSW" Firmware/all_flash/DeviceTree.d22ap.im4p DeviceTree.d22ap.im4p
 echo "unpack.sh: done: $(du -sh rootfs | cut -f1) rootfs, $(du -sh cryptex | cut -f1) cryptex, $(du -sh cryptex-app | cut -f1) App cryptex, $(du -sh $CACHE | cut -f1) dyld shared cache"
+echo "unpack.sh: [sathiyasenpai] iOS rootfs extraction complete for OnePlus Nord 4 (avalon)"

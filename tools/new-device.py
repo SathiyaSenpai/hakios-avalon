@@ -3,7 +3,7 @@
 
 usage: tools/new-device.py NAME [--fdt FILE | --adb] [--out DIR] [--force]
 
-  NAME    the new directory under devices/ (lower case letters, digits and dashes: redwood)
+  NAME    the new directory under devices/ (lower case letters, digits and dashes: avalon)
   --fdt   the phone's device tree, a file (adb pull /sys/firmware/fdt; the tree of the phone's own Android)
   --adb   pull it from the phone on adb now (as the shell user, then through su: on some ROMs the file is
           readable by root only)
@@ -18,7 +18,7 @@ What it makes, in devices/NAME/:
               the files whose head says where their numbers came from
   pull-soc.sh pull the tree again and regenerate soc.args
 
-It also compares the result with the reference phone's (devices/redwood): a tree that gives the same
+It also compares the result with the reference phone's (devices/avalon): a tree that gives the same
 values means the kernel's built-in defaults already fit, and a port is then about the board (display,
 touch, UEFI) and not the SoC. Nothing here changes the phone; the only things read from it are its tree.
 """
@@ -35,15 +35,13 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SOC_ARGS = os.path.join(HERE, "soc-args.py")
-REFERENCE = "redwood"
+REFERENCE = "avalon"
 REFERENCE_DTB = os.path.join(ROOT, "devices", REFERENCE, "prebuilt", "device-tree.dtb")
 
 # what is the phone's own, and the files whose head says where their numbers came from
 CHECKLIST = [
-    ("UEFI", "the firmware that starts the loader: devices/%s/uefi/ is a port of Mu-Silicium; the vendor's drivers are "
-             "extracted from your own phone (uefi/README.md)" % REFERENCE),
-    ("Display, buttons, touch", "drivers/input/hakios.input.c, hakios.buttons.c, hakios.goodix.c (the reference phone's "
-                                "controller; another phone has another)"),
+    ("UEFI", "the firmware that starts the loader: devices/%s/u-boot/ for HakiOS U-Boot" % REFERENCE),
+    ("Display, buttons, touch", "drivers/input/hakios.input.c, hakios.buttons.c, hakios.s3910.c"),
     ("Storage", "hakios.ufs.c and hakios.ufshc.c (UFS); a phone with eMMC needs another driver"),
     ("CPU clocks", "hakios.cpufreq.c"),
     ("GPU", "hakios.adreno.c (Adreno 642L here: another generation needs its own firmware and registers)"),
@@ -108,7 +106,7 @@ def main():
     args = ap.parse_args()
 
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.name):
-        sys.exit("new-device: NAME is lower case letters, digits and dashes (like redwood), got %r" % args.name)
+        sys.exit("new-device: NAME is lower case letters, digits and dashes (like avalon), got %r" % args.name)
     out = args.out or os.path.join(ROOT, "devices", args.name)
     if os.path.exists(out) and not args.force:
         sys.exit("new-device: %s exists (--force to write into it)" % out)
@@ -140,7 +138,8 @@ def main():
         missing = [n for n in names if n not in found]
         ref = dict(l.split("=", 1) for l in reference) if reference else {}
         differs = [n for n in found if n in ref and ref[n] != found[n]]
-        same_as_reference = bool(ref) and not missing and not differs and set(found) == set(ref)
+        missing_ref = [n for n in missing if n in ref]
+        same_as_reference = bool(ref) and set(found) == set(ref)
 
         os.makedirs(out, exist_ok=True)
         open(os.path.join(out, "soc.args"), "w", newline="\n").write("\n".join(lines) + "\n")
@@ -155,13 +154,12 @@ def main():
                           "**missing**: the tree has no node this was read from; see the table in devices/%s/README.md" % REFERENCE
                           if n not in found else "")) for n in names)
         verdict = (
-            "**The tree gives the same %d values as the reference phone (`devices/%s`).** The kernel's built-in defaults "
-            "already fit this SoC, so `soc.args` changes nothing here; what is left to port is the board (UEFI, display, "
-            "touch, and the rest of the checklist below), not the SoC." % (len(found), REFERENCE)
+            "**The tree gives the same %d values as the reference phone (`devices/%s`).** `soc.args` matches the "
+            "reference; what is left to port is the board (U-Boot/UEFI, display, touch, and the rest of the checklist below)." % (len(found), REFERENCE)
             if same_as_reference else
             "**This tree differs from the reference phone's** in %d value(s) and lacks %d: %s. Those are this phone's own "
             "addresses; `soc.args` carries them to the kernel and the run scripts add the file to the command line." %
-            (len(differs), len(missing), ", ".join("`%s`" % n for n in (differs + missing)) or "none") if ref else
+            (len(differs), len(missing_ref), ", ".join("`%s`" % n for n in (differs + missing_ref)) or "none") if ref else
             "No reference tree to compare with (devices/%s/prebuilt/device-tree.dtb is missing)." % REFERENCE)
         checklist = "\n".join("- [ ] **%s**: %s" % (a, b) for a, b in CHECKLIST)
         readme = """# Device: {model} ({name})
@@ -200,15 +198,15 @@ The kernel's settings are layered the way an Android kernel's are: the common ke
 
     configs/{name}.config          CONFIG_DEVICE="{name}"   and whatever is true of this phone only
     configs/{name}_defconfig       #include common_defconfig
-                                   #include <the SoC's fragment: sc7280.config for the SC7280 family>
+                                   #include <the SoC's fragment: cliffs.config for the SM7675 Cliffs family>
                                    #include {name}.config
 
 Then `make {name}_defconfig`. Turn on only what this phone has been shown to do; `tools/hakios-config.py check` says what the
 choice needs.
 
 The drivers are part of the configuration too (`docs/drivers-config.md`): every one is built unless a configuration leaves it out,
-and the addresses, pins and rails in each are the reference phone's. Leave out in `configs/{name}.config` what has not been
-ported to this phone yet (`# CONFIG_HAKIOS_GOODIX is not set`, ...; `configs/qemu_defconfig` leaves out all of them), and put
+and the addresses, pins and rails must match the phone. Leave out in `configs/{name}.config` what has not been
+ported to this phone yet (`# CONFIG_HAKIOS_GOODIX is not set`, ...), and put
 each one back when it has been made to work here. `tools/hakios-config.py show` lists what is built in.
 
 ## Firmware

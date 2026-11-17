@@ -68,7 +68,7 @@ jobs:
           python3 tools/hakios-device-test.py
       - name: The documentation pages made from the source are current
         run: |
-          [ ! -d devices/redwood ] || python3 tools/docs-gen.py --check
+          [ ! -d devices/avalon ] || python3 tools/docs-gen.py --check
           python3 tools/docs-check.py
       - name: The Metal plug-in's reading of a .metallib refuses every file cut short or bent (sanitizers)
         run: sh tools/metallib-test.sh
@@ -79,7 +79,7 @@ jobs:
       - name: APFS tools self-test
         run: |
           [ -x tools/apfs/run-tests.sh ] && tools/apfs/run-tests.sh || echo "no self-test on this runner"
-      - name: SoC args generator reproduces the POCO X5 Pro values
+      - name: SoC args generator reproduces the OnePlus Nord 4 (avalon) values
         run: |
           sh tools/soc-args-test.sh
           # ... and finds the AOSS mailbox however a phone's own device tree describes it

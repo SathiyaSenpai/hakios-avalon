@@ -80,6 +80,7 @@
 
 static vm_offset_t gicd_base, gicr_base;
 static vm_size_t   gicr_size;
+static uint32_t    gicr_stride = 0;
 static vm_offset_t gicr_cpu_base[MAX_CPUS]; /* each processor's redistributor frame */
 
 /*
@@ -399,8 +400,19 @@ gic_find_redistributor(void)
 	/* GICR_TYPER[63:32] packs Aff3.Aff2.Aff1.Aff0 */
 	uint32_t affinity = (uint32_t)(((mpidr >> 32) & 0xff) << 24 | (mpidr & 0xffffff));
 
-	for (vm_offset_t frame = gicr_base; frame + GICR_FRAME_SIZE <= gicr_base + gicr_size; frame += GICR_FRAME_SIZE) {
+	vm_offset_t frame = gicr_base;
+	while (frame + GICR_FRAME_SIZE <= gicr_base + gicr_size) {
 		uint64_t typer = *(volatile uint64_t *)(frame + GICR_TYPER);
+		/* GICv4/v4.1 redistributors have 4 pages (0x40000) per core; GICv3 has 2 pages (0x20000).
+		 * GICR_TYPER_VLPIS is bit 1. */
+		uint32_t step;
+		if (gicr_stride != 0) {
+			step = gicr_stride;
+		} else if (typer & (1ULL << 1)) {
+			step = 0x40000;
+		} else {
+			step = 0x20000;
+		}
 
 		if ((uint32_t)(typer >> 32) == affinity) {
 			return frame;
@@ -408,6 +420,7 @@ gic_find_redistributor(void)
 		if (typer & GICR_TYPER_LAST) {
 			break;
 		}
+		frame += step;
 	}
 	panic("gic: no redistributor for MPIDR 0x%llx", mpidr);
 }
@@ -437,6 +450,13 @@ gic_v3_irq_cpu_init(void)
 		gicd_base = ml_io_map(soc_base + reg[0], reg[1]);
 		gicr_base = ml_io_map(soc_base + reg[2], reg[3]);
 		gicr_size = reg[3];
+		if (SecureDTGetProperty(entry, "redistributor-stride", &prop, &prop_size) == kSuccess) {
+			if (prop_size == sizeof(uint64_t)) {
+				gicr_stride = (uint32_t)*(uint64_t const *)prop;
+			} else if (prop_size == sizeof(uint32_t)) {
+				gicr_stride = *(uint32_t const *)prop;
+			}
+		}
 		if (gicd_base == 0 || gicr_base == 0) {
 			panic("gic: cannot map the distributor/redistributor");
 		}

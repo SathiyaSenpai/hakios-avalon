@@ -53,7 +53,7 @@
 extern const void *_dyld_get_shared_cache_range(size_t *length);
 
 #define CACHE_BASE 0x180000000UL                /* where the cache was built to be, before the slide */
-#define HAKIOS_GL "/redwood/lib/libhakios.gl.dylib"
+#define HAKIOS_GL "/avalon/lib/libhakios.gl.dylib"
 
 static uintptr_t slide;
 
@@ -778,7 +778,7 @@ make_service(IOHIDEventSystemClientRef client, const char *product, int page, in
 	CFDictionarySetValue(properties, CFSTR("DeviceUsagePairs"), pairs);
 	CFDictionarySetValue(properties, CFSTR("Built-In"), kCFBooleanTrue);
 	CFDictionarySetValue(properties, CFSTR("Transport"), CFSTR("SPI"));
-	CFDictionarySetValue(properties, CFSTR("Manufacturer"), CFSTR("redwood"));
+	CFDictionarySetValue(properties, CFSTR("Manufacturer"), CFSTR("avalon"));
 	CFDictionarySetValue(properties, CFSTR("Product"), name);
 	CFDictionarySetValue(properties, CFSTR("VendorID"), zero);
 	CFDictionarySetValue(properties, CFSTR("ProductID"), zero);
@@ -910,7 +910,7 @@ input_thread(__unused void *arg)
 	unsigned count = 0, waking = 0;         /* waking: the fingers whose touch went into waking the display */
 	int device;
 
-	pthread_setname_np("redwood input");
+	pthread_setname_np("avalon input");
 	{
 		char arguments[1024] = "";
 		size_t size = sizeof(arguments) - 1;
@@ -927,13 +927,25 @@ input_thread(__unused void *arg)
 	}
 	sleep(3);                       /* let backboardd get as far as starting its event server */
 	for (unsigned i = 0; screen == NULL && i < sizeof(types) / sizeof(types[0]); i++) {
-		/* this waits until the server (this very program) answers */
-		client = IOHIDEventSystemClientCreateWithType(NULL, types[i], NULL);
+		/* this waits until the server (this very program) answers; backboardd requires both bundleID and pid */
+		int pid = getpid();
+		CFNumberRef pid_ref = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
+		const void *keys[] = { CFSTR("bundleID"), CFSTR("pid") };
+		const void *values[] = { CFSTR("com.apple.backboardd"), pid_ref };
+		CFDictionaryRef attributes = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
+		    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+		client = IOHIDEventSystemClientCreateWithType(NULL, types[i], attributes);
+		if (attributes != NULL) {
+			CFRelease(attributes);
+		}
+		if (pid_ref != NULL) {
+			CFRelease(pid_ref);
+		}
 		if (client == NULL) {
 			say("hakios: input: no HID client of type %d\n", types[i]);
 			continue;
 		}
-		IOHIDEventSystemClientScheduleWithDispatchQueue(client, dispatch_queue_create("redwood.input", NULL));
+		IOHIDEventSystemClientScheduleWithDispatchQueue(client, dispatch_queue_create("avalon.input", NULL));
 		screen = make_service(client, "HakiOS touch screen", HID_PAGE_DIGITIZER, HID_USAGE_TOUCH_SCREEN, true);
 		if (screen == NULL) {
 			say("hakios: input: a HID client of type %d may not create services\n", types[i]);
@@ -951,8 +963,12 @@ input_thread(__unused void *arg)
 	while (read(device, &t, sizeof(t)) == (ssize_t)sizeof(t)) {
 		uint64_t read_at = mach_absolute_time();
 
-		if (count++ < 4) {
-			say("hakios: input: sample type %u finger %u at %u %u\n", t.type, t.finger, t.x, t.y);
+		if (count++ < 8) {
+			if (t.type > HAKIOS_TOUCH_UP) {
+				say("hakios: input: button event type %u (button %u)\n", t.type, t.finger);
+			} else {
+				say("hakios: input: sample type %u finger %u at %u %u\n", t.type, t.finger, t.x, t.y);
+			}
 		}
 		if (t.type > HAKIOS_TOUCH_UP) {
 			if (buttons != NULL) {
@@ -1161,6 +1177,23 @@ watch_metallib_lookups(const char *arguments)
 	    ca_metallib ? ca_metallib : "");
 }
 
+static BOOL
+sensor_never_pocket(__unused id self, __unused SEL selector)
+{
+	return NO;
+}
+
+static void
+sensor_mode_fixes(void)
+{
+	Class cls = objc_getClass("BKSHIDUISensorMode");
+	if (cls != NULL) {
+		class_replaceMethod(cls, sel_registerName("pocketTouchesExpected"), (IMP)sensor_never_pocket, "B@:");
+		class_replaceMethod(cls, sel_registerName("isPocketTouchesExpected"), (IMP)sensor_never_pocket, "B@:");
+		say("hakios: backboardd: BKSHIDUISensorMode pocketTouchesExpected suppressed\n");
+	}
+}
+
 __attribute__((constructor))
 static void
 hakios_init(void)
@@ -1220,6 +1253,7 @@ hakios_init(void)
 		}
 		opengl_es();
 		window_server_fixes();
+		sensor_mode_fixes();
 		/*
 		 * brightness_fixes() is not used for now: with it backboardd no longer took our touch
 		 * screen service for its own ("still waiting for a main screen digitizer"), whether the

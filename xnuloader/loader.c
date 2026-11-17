@@ -168,6 +168,7 @@ str_eq(const char *a, const char *b)
  * the screen is left to the kernel (and to "oem screenshot").
  */
 static int screen_quiet;
+static int phone_display_active = 0;
 /*
  * And while the kernel runs, whatever started the loader: under HakiOS's U-Boot (the menu of an installed HakiOS) there
  * is no USB command loop, the text console is U-Boot's, drawn into the framebuffer the kernel shows Darwin in, and every
@@ -351,11 +352,19 @@ write_logs(const char *klog, uint64_t klog_len)
 
 	compose_logs(klog, klog_len);
 	if (bio == NULL) {
-		/* No log partition (QEMU): echo the returned kernel log on the console instead. */
+		/* On physical phones, the screen already displayed the live console.
+		 * Echoing the raw circular log (with binary stackshots) ruins the clean screen.
+		 * Only echo on non-phone (e.g. QEMU) or if display wasn't active. */
+		if (phone_display_active) {
+			return;
+		}
 		if (klog != NULL) {
 			print("\n== KERNEL LOG ==\n");
 			for (uint64_t i = 0; i < klog_len; i++) {
-				put_char(klog[i]);
+				char c = klog[i];
+				if ((c >= 0x20 && c < 0x7f) || c == '\n' || c == '\t' || c == '\r') {
+					put_char(c);
+				}
 			}
 			print("\n== END OF LOG ==\n");
 		}
@@ -554,6 +563,7 @@ struct platform {
 	const char *name;
 	uint64_t io_base, io_size;       /* one window covering the SoC peripherals */
 	uint64_t gic_dist, gic_redist;   /* GICv3 */
+	uint64_t gic_redist_size;
 	uint64_t uart;                   /* PL011, 0 if none */
 	int psci_hvc;                    /* the firmware's power interface is called with HVC, not SMC */
 	int log_other_cpu;               /* keep notes in the log partition while a kernel starts on another core */
@@ -563,29 +573,12 @@ struct platform {
 	uint32_t small_cores;            /* a bit for each of the slower cores, by number: "small-core" in the device tree */
 };
 
-static const struct platform platform_qemu_virt = {
-	.name = "qemu-virt", .io_base = 0x08000000, .io_size = 0x08000000,
-	.gic_dist = 0x08000000, .gic_redist = 0x080A0000, .uart = 0x09000000, .psci_hvc = 1,
-	.cores = 8, .core_shift = 0,
-	/*
-	 * QEMU's emulated cores stop each other all the time (every flush of a page from all the
-	 * TLBs is a rendezvous of all its CPU threads), and the kernel's patience with a spin lock
-	 * is that of real hardware: an eighth of a second by a 24 MHz clock, a twentieth here.
-	 */
-	.timeout_scale = 20,
-};
-
-static const struct platform platform_redwood = {
-	/* io_base must be non-zero: XNU treats a zero SoC base as "no SoC" and skips clock setup. */
-	.name = "redwood", .io_base = 0x00400000, .io_size = 0x3FC00000,
-	.gic_dist = 0x17A00000, .gic_redist = 0x17A60000, .uart = 0, .log_other_cpu = 1,
+static const struct platform platform_avalon = {
+	.name = "avalon", .io_base = 0x00400000, .io_size = 0x3FC00000,
+	.gic_dist = 0x17100000, .gic_redist = 0x17180000, .gic_redist_size = 0x200000, .uart = 0, .log_other_cpu = 1,
 	.cores = 8, .core_shift = 8,
-	/*
-	 * Cores 0-3 are Cortex-A55s (1.8 GHz at most), 4-7 Cortex-A78s (2.4 GHz): a big one is about
-	 * 2.5 times as fast. The kernel uses the small ones only when the big ones are all busy
-	 * (XNU's machine_routines.c, ml_choose_slow_core_partners()).
-	 */
-	.small_cores = 0x0f,
+	/* Cores 0-2 are Cortex-A520 (small), 3-6 Cortex-A720 (mid), 7 Cortex-X4 (prime) */
+	.small_cores = 0x07,
 };
 
 /* ------------------------------------------------------------------------ */
@@ -2235,7 +2228,7 @@ charger_start(void)
 	static const efi_guid qcom_charger_guid = QCOM_CHARGER_GUID;
 	efi_status ex_status, qcom_status, init_status = 0;
 
-	if (charger_enabled || PLAT != &platform_redwood) {
+	if (charger_enabled) {
 		return;
 	}
 	ex_status = BS->locate_protocol(&charger_ex_guid, NULL, (void **)&CHARGER_EX);
@@ -2248,11 +2241,15 @@ charger_start(void)
 	    (!EFI_ERROR(qcom_status) && QCOM_CHARGER != NULL);
 	print("battery: ChargerEx=%x QcomCharger=%x init=%x shared=%x\n", ex_status, qcom_status, init_status,
 	    (uint64_t)(uintptr_t)&charger_shared);
-	charger_poll();
-	print("battery: flags=%x SOC=%d%% V=%d mV I=%d mA T=%d C action=%d\n", (uint64_t)charger_shared.flags,
-	    (uint64_t)(int64_t)charger_shared.soc_percent, (uint64_t)(int64_t)charger_shared.voltage_mv,
-	    (uint64_t)(int64_t)charger_shared.current_ma, (uint64_t)(int64_t)charger_shared.temperature_c,
-	    (uint64_t)charger_shared.charger_action);
+	if (charger_enabled) {
+		charger_poll();
+		print("battery: flags=%x SOC=%d%% V=%d mV I=%d mA T=%d C action=%d\n", (uint64_t)charger_shared.flags,
+		    (uint64_t)(int64_t)charger_shared.soc_percent, (uint64_t)(int64_t)charger_shared.voltage_mv,
+		    (uint64_t)(int64_t)charger_shared.current_ma, (uint64_t)(int64_t)charger_shared.temperature_c,
+		    (uint64_t)charger_shared.charger_action);
+	} else {
+		print("battery: UEFI charger protocols absent (kernel fallback active)\n");
+	}
 }
 
 /* For the record: how much the kernel on the other core has logged so far, and the end of it. */
@@ -2425,10 +2422,12 @@ run_on_other_cpu(uint64_t mpidr, uint64_t entry, uint64_t boot_args_pa, const st
 			for (int k = 0; k < 64; k++) {
 				block_poll();
 				for (volatile int i = 0; i < 300; i++) {
+					__asm__ volatile ("yield");
 				}
 			}
 		} else {
 			for (volatile int i = 0; i < 20000; i++) {
+				__asm__ volatile ("yield");
 			}
 		}
 	}
@@ -2453,7 +2452,6 @@ run_on_other_cpu(uint64_t mpidr, uint64_t entry, uint64_t boot_args_pa, const st
 #define VIRT_WDT_SET_TIME  0x86000008u
 #define WDT_BITE_MS        30000u
 
-static const struct platform *PLAT;
 static int wdt_armed;
 
 static uint64_t smc_x3;             /* the fourth argument register, for the one call that has one */
@@ -2503,9 +2501,6 @@ wdt_arm(void)
 {
 	uint64_t ctl = 0, since = 0;
 
-	if (PLAT != &platform_redwood) {
-		return; /* SMC is not routed anywhere useful on QEMU virt */
-	}
 	uint64_t st = smc_call(VIRT_WDT_STATUS, 0, 0, &ctl, &since);
 	uint64_t r_time = smc_call(VIRT_WDT_SET_TIME, WDT_BITE_MS, WDT_BITE_MS, NULL, NULL);
 	uint64_t r_ctl = smc_call(VIRT_WDT_CONTROL, 3, 0, NULL, NULL);
@@ -2625,10 +2620,10 @@ parse_payload(struct payload_info *pi, int verbose)
 			print("payload entry is larger than the payload (size %x): not used\n", (uint64_t)e->size);
 			return 0;
 		}
-		if (str_eq(e->name, "ramdisk")) {
+		if (str_eq(e->name, "ramdisk") || str_eq(e->name, "initrd")) {
 			pi->ramdisk = p + sizeof(*e);             /* becomes /dev/md0, the root device */
 			pi->ramdisk_size = e->size;
-		} else if (str_eq(e->name, "kernel")) {
+		} else if (str_eq(e->name, "kernel") || str_eq(e->name, "mach_kernel")) {
 			pi->kernel = p + sizeof(*e);
 			pi->kernel_size = e->size;
 		} else if (str_eq(e->name, "cmdline")) {
@@ -2702,7 +2697,7 @@ build_nvram_image(uint8_t *image)
 /* Running the kernel                                                       */
 
 static efi_gop *GOP;
-/* The display handed to the kernel: the firmware's, or one we set up ourselves (QEMU). base 0 = none. */
+/* The display handed to the kernel: the firmware's. base 0 = none. */
 static struct {
 	uint64_t base;
 	uint32_t width, height, stride;
@@ -3088,7 +3083,7 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	ba->memSize = win_size;
 	ba->memSizeActual = win_size;
 	ba->topOfKernelData = top;
-	/* any display the firmware has set up: the phone's panel, or QEMU's ramfb */
+	/* any display the firmware has set up: the phone's panel */
 	if (SCREEN.base != 0) {
 		/*
 		 * v_display is how iBoot says "graphics mode": the kernel then keeps
@@ -3125,7 +3120,23 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	for (const char *c = base_cmdline; *c && n < BOOT_LINE_LENGTH - 1; c++) {
 		ba->commandLine[n++] = *c;
 	}
-	/* one processor unless the payload asks for more (of two "cpus=" the kernel takes the first) */
+	if (PLAT == &platform_avalon) {
+		int own_smem = 0, own_soc = 0;
+		for (const char *c = pi.cmdline; *c; c++) {
+			if (c == pi.cmdline || c[-1] == ' ') {
+				own_smem |= starts_with(c, "soc_smem=");
+				own_soc  |= starts_with(c, "soc=");
+			}
+		}
+		if (!own_smem) {
+			const char *s = "soc_smem=0x81d00000 soc_smem_size=0x200000 ";
+			for (const char *c = s; *c && n < BOOT_LINE_LENGTH - 1; c++) ba->commandLine[n++] = *c;
+		}
+		if (!own_soc) {
+			const char *s = "soc=cliffs ";
+			for (const char *c = s; *c && n < BOOT_LINE_LENGTH - 1; c++) ba->commandLine[n++] = *c;
+		}
+	}
 	if (!more_cores) {
 		for (const char *c = "cpus=1 "; *c && n < BOOT_LINE_LENGTH - 1; c++) {
 			ba->commandLine[n++] = *c;
@@ -3159,7 +3170,7 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 		}
 		if (n < BOOT_LINE_LENGTH - 1) ba->commandLine[n++] = ' ';
 	}
-	if (battery_requested) {
+	if (battery_requested && charger_enabled) {
 		static const char prefix[] = "battery_shared_pa=0x";
 		static const char hex[] = "0123456789abcdef";
 		uint64_t address = (uint64_t)(uintptr_t)&charger_shared;
@@ -3226,8 +3237,8 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	dt_identity(&w, identity_root, sizeof(identity_root) / sizeof(identity_root[0]), identity_root_data);
 	dt_prop_str(&w, "platform-name", "t8015");
 	/* what iBoot takes from the factory configuration of a real phone; fixed size fields */
-	dt_prop_padded(&w, "serial-number", "RDW00POCOX5P", 32);
-	dt_prop_padded(&w, "mlb-serial-number", "RDW00POCOX5PMLB00", 32);
+	dt_prop_padded(&w, "serial-number", "AVL00OPNORD4", 32);
+	dt_prop_padded(&w, "mlb-serial-number", "AVL00OPNORD4MLB00", 32);
 	dt_prop_padded(&w, "model-number", "MQAC2", 32);
 	dt_prop_padded(&w, "region-info", "LL/A", 32);
 	dt_prop_padded(&w, "regulatory-model-number", "A1865", 32);
@@ -3254,16 +3265,16 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	 * (UDID) from the serial number, the chip ID and the two addresses; when one is missing it
 	 * asks its helper for the factory data, is refused and waits forever (and lsd with it).
 	 */
-	static const uint8_t wifi_address[6] = { 0x02, 0x52, 0x44, 0x57, 0x00, 0x01 };
-	static const uint8_t bluetooth_address[6] = { 0x02, 0x52, 0x44, 0x57, 0x00, 0x02 };
-	static const uint8_t manifest_hash[48] = { 0x72, 0x65, 0x64, 0x77, 0x6f, 0x6f, 0x64 };
+	static const uint8_t wifi_address_avalon[6] = { 0x02, 0x41, 0x56, 0x4c, 0x00, 0x01 };
+	static const uint8_t bluetooth_address_avalon[6] = { 0x02, 0x41, 0x56, 0x4c, 0x00, 0x02 };
+	static const uint8_t manifest_hash_avalon[48] = { 'a', 'v', 'a', 'l', 'o', 'n' };
 	static const uint8_t no_behavior[16];
-	dt_prop_u64(&w, "unique-chip-id", 0x000052445730001ULL);
+	dt_prop_u64(&w, "unique-chip-id", 0x000041564c30001ULL);
 	dt_prop_u32(&w, "chip-id", 0x8015);
 	dt_prop_u32(&w, "board-id", 0x06);
-	dt_prop(&w, "mac-address-wifi0", wifi_address, sizeof(wifi_address));
-	dt_prop(&w, "mac-address-bluetooth0", bluetooth_address, sizeof(bluetooth_address));
-	dt_prop(&w, "boot-manifest-hash", manifest_hash, sizeof(manifest_hash));
+	dt_prop(&w, "mac-address-wifi0", wifi_address_avalon, 6);
+	dt_prop(&w, "mac-address-bluetooth0", bluetooth_address_avalon, 6);
+	dt_prop(&w, "boot-manifest-hash", manifest_hash_avalon, 48);
 	dt_prop(&w, "software-behavior", no_behavior, sizeof(no_behavior));
 	dt_prop_str(&w, "firmware-version", "iBoot-8422.100.650");
 	dt_prop_u32(&w, "certificate-production-status", 1);
@@ -3428,8 +3439,12 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
 	dt_begin(&w, "gic");
 	dt_prop_str(&w, "device_type", "interrupt-controller");
 	dt_prop_str(&w, "compatible", "arm,gic-v3");
-	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000, plat->gic_redist - plat->io_base, 0x100000 };
+	uint64_t rsize = plat->gic_redist_size ? plat->gic_redist_size : 0x100000;
+	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000, plat->gic_redist - plat->io_base, rsize };
 	dt_prop(&w, "reg", gic_reg, sizeof(gic_reg));
+	if (plat->gic_redist_size >= 0x200000) {
+		dt_prop_u64(&w, "redistributor-stride", 0x40000);
+	}
 	dt_end(&w);
 	if (plat->uart != 0) {
 		dt_begin(&w, "uart0");
@@ -3681,11 +3696,13 @@ usb_start(void)
 	efi_status s = USB->start_ex(&set);
 	if (EFI_ERROR(s)) {
 		print("usb: start failed %x\n", s);
+		flush_log();
 		return 0;
 	}
 	if (EFI_ERROR(USB->allocate_transfer_buffer(USB_CHUNK, (void **)&usb_rx_buf)) ||
 	    EFI_ERROR(USB->allocate_transfer_buffer(USB_CHUNK, (void **)&usb_tx_buf))) {
 		print("usb: no transfer buffers\n");
+		flush_log();
 		return 0;
 	}
 	print("usb: started\n");
@@ -4071,97 +4088,6 @@ usb_command_loop(void)
 /* ------------------------------------------------------------------------ */
 
 /*
- * QEMU's "ramfb" display shows whatever guest memory it is told to, in any size; the firmware
- * only offers a few small landscape modes of it. So we point it at memory of our own with the
- * shape of the iPhone's screen, through the fw_cfg file "etc/ramfb" (the firmware's own mode
- * is simply replaced). In QEMU the display is then exactly what Darwin expects; on the real phone
- * the kernel's display driver scales that picture to the panel.
- */
-#define PHONE_WIDTH     1125            /* the screen of the iPhone X, whose identity we carry */
-#define PHONE_HEIGHT    2436
-#define FW_CFG_BASE     0x09020000ULL   /* QEMU virt: data at +0, selector at +8, DMA address at +16 */
-#define FW_CFG_FILE_DIR 0x19
-#define FW_CFG_DMA_SELECT 0x08
-#define FW_CFG_DMA_WRITE  0x10
-
-static uint32_t
-be32(uint32_t v)
-{
-	return __builtin_bswap32(v);
-}
-
-static void
-fw_cfg_read(void *buf, uint32_t len)
-{
-	for (uint32_t i = 0; i < len; i++) {
-		((uint8_t *)buf)[i] = *(volatile uint8_t *)FW_CFG_BASE;
-	}
-}
-
-static void
-ramfb_phone_screen(void)
-{
-	static struct {
-		uint64_t addr;
-		uint32_t fourcc, flags, width, height, stride;
-	} __attribute__((packed)) cfg;
-	/*
-	 * volatile: QEMU writes `control' back (to 0) when it has done the request, behind the compiler's back. Without the
-	 * qualifier a build is free to keep the value written a few lines below and never look again, and the loader then
-	 * says the request failed, leaves ramfb at the firmware's 800x600 and Darwin draws its 1125x2436 into a corner: a black window
-	 * (it did, with a newer build of this very file; the older one happened to reload).
-	 */
-	static volatile struct {
-		uint32_t control, length;
-		uint64_t address;
-	} dma;
-	struct {
-		uint32_t size;
-		uint16_t select, reserved;
-		char name[56];
-	} file;
-	uint32_t count, select = 0;
-	uint64_t fb = 0, bytes = (uint64_t)PHONE_WIDTH * 4 * PHONE_HEIGHT;
-
-	*(volatile uint16_t *)(FW_CFG_BASE + 8) = __builtin_bswap16(FW_CFG_FILE_DIR);
-	fw_cfg_read(&count, sizeof(count));
-	count = be32(count);
-	for (uint32_t i = 0; i < count && i < 256 && select == 0; i++) {
-		fw_cfg_read(&file, sizeof(file));
-		if (str_eq(file.name, "etc/ramfb")) {
-			select = __builtin_bswap16(file.select);
-		}
-	}
-	if (select == 0 || EFI_ERROR(BS->allocate_pages(AllocateAnyPages, EfiLoaderData, (bytes + 0xFFF) >> 12, &fb))) {
-		return;
-	}
-	memset((void *)(uintptr_t)fb, 0, (size_t)bytes);
-	cfg.addr = __builtin_bswap64(fb);
-	cfg.fourcc = be32(0x34325258);          /* 'XR24': blue, green, red, unused */
-	cfg.flags = 0;
-	cfg.width = be32(PHONE_WIDTH);
-	cfg.height = be32(PHONE_HEIGHT);
-	cfg.stride = be32(PHONE_WIDTH * 4);
-	dma.control = be32(select << 16 | FW_CFG_DMA_SELECT | FW_CFG_DMA_WRITE);
-	dma.length = be32(sizeof(cfg));
-	dma.address = __builtin_bswap64((uint64_t)(uintptr_t)&cfg);
-	__asm__ volatile ("dsb sy" ::: "memory");       /* (cfg and dma are in memory before the device is told to read them) */
-	*(volatile uint64_t *)(FW_CFG_BASE + 16) = __builtin_bswap64((uint64_t)(uintptr_t)&dma);
-	/* the device does it at once; allow it some time all the same instead of reading once */
-	for (uint32_t spin = 0; dma.control != 0 && spin < 1000000; spin++) {
-		__asm__ volatile ("" ::: "memory");
-	}
-	if (dma.control != 0) {
-		print("ramfb: control %x after the request\n", (uint64_t)be32(dma.control));
-		return;
-	}
-	SCREEN.base = fb;
-	SCREEN.width = PHONE_WIDTH;
-	SCREEN.height = PHONE_HEIGHT;
-	SCREEN.stride = PHONE_WIDTH * 4;
-}
-
-/*
  * UEFI-native boot: a payload from the volume the loader was started from.
  *
  * On the phone the payload (the kernel, the small root image, the command line) is put in memory at PAYLOAD_BASE
@@ -4304,6 +4230,7 @@ print_banner(void)
 	print("   #   #  #   #  #   #  #####   ###   ####\n");
 	print("\n");
 	print("   hello hakios-kernel!\n");
+	print("   port by sathiyasenpai for OnePlus Nord 4 (avalon)\n");
 	print("   kernel.ver=%s\n", version ? version : "unknown");
 	print("\n");
 }
@@ -4334,20 +4261,16 @@ efi_main(efi_handle image, efi_system_table *st)
 	print("CurrentEL=%x MIDR=%x MMFR0=%x CNTFRQ=%d image=%x\n", READ_SYSREG(CurrentEL) >> 2, READ_SYSREG(MIDR_EL1),
 	    READ_SYSREG(ID_AA64MMFR0_EL1), READ_SYSREG(CNTFRQ_EL0), (uint64_t)(uintptr_t)&__ImageBase);
 
-	PLAT = &platform_qemu_virt;
+	PLAT = &platform_avalon;
 	if (EFI_ERROR(BS->locate_protocol(&gop_guid, NULL, (void **)&GOP)) || GOP->mode == NULL ||
 	    GOP->mode->info == NULL || GOP->mode->fb_base == 0) {
-		GOP = NULL;                     /* no display (QEMU without -device ramfb) */
+		GOP = NULL;
 	} else {
 		SCREEN.base = GOP->mode->fb_base;
 		SCREEN.width = GOP->mode->info->width;
 		SCREEN.height = GOP->mode->info->height;
 		SCREEN.stride = GOP->mode->info->pixels_per_scanline * 4;
-		if (SCREEN.base == 0xE1000000ULL) {
-			PLAT = &platform_redwood;
-		} else {
-			ramfb_phone_screen();
-		}
+		phone_display_active = 1;
 		print("display %d x %d at %x\n", (uint64_t)SCREEN.width, (uint64_t)SCREEN.height, SCREEN.base);
 	}
 	print("platform %s\n", PLAT->name);
@@ -4364,6 +4287,13 @@ efi_main(efi_handle image, efi_system_table *st)
 	/* One-shot mode: run the kernel that came with the image, then reset. */
 	if (have_payload) {
 		run_kernel(0, 0);
+	}
+	print("\n=== HakiOS run completed. Pausing 5 minutes before reboot... ===\n");
+	flush_log();
+	wdt_set_ms(60000);
+	for (int i = 0; i < 300; i++) {
+		wdt_pet();
+		BS->stall(1000000);
 	}
 	reboot();
 	return 0;

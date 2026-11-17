@@ -119,10 +119,10 @@ index 4b83160780c3..8997af1f0e1b 100644
  include $(MakeInc_rule)
  include $(MakeInc_dir)
 diff --git a/bsd/conf/files b/bsd/conf/files
-index 44274016a4cf..27cccab98c8e 100644
+index 44274016a4cf..525a728caadb 100644
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
-@@ -109,6 +109,51 @@ bsd/dev/munge.c 			optional config_requires_u32_munging
+@@ -109,6 +109,52 @@ bsd/dev/munge.c 			optional config_requires_u32_munging
  bsd/dev/unix_startup.c			standard
  
  bsd/dev/monotonic.c optional monotonic
@@ -150,6 +150,7 @@ index 44274016a4cf..27cccab98c8e 100644
 +bsd/dev/hakios.haptic.c                  optional hakios_haptic
 +bsd/dev/hakios.virtio_input.c            optional hakios_virtio_input
 +bsd/dev/hakios.goodix.c                  optional hakios_goodix
++bsd/dev/hakios.s3910.c                   optional hakios_s3910
 +bsd/dev/hakios.buttons.c                 optional hakios_buttons
 +bsd/dev/hakios.qmi.c                     optional hakios_qmi
 +bsd/dev/hakios.mpss.c                    optional hakios_modem
@@ -174,7 +175,7 @@ index 44274016a4cf..27cccab98c8e 100644
  bsd/dev/dev_perfmon.c optional config_perfmon
  
  bsd/libkern/crc32.c			standard
-@@ -155,6 +200,52 @@ bsd/miscfs/devfs/devfs_vfsops.c		optional devfs
+@@ -155,6 +201,52 @@ bsd/miscfs/devfs/devfs_vfsops.c		optional devfs
  bsd/miscfs/mockfs/mockfs_fsnode.c	optional mockfs
  bsd/miscfs/mockfs/mockfs_vfsops.c	optional mockfs
  bsd/miscfs/mockfs/mockfs_vnops.c	optional mockfs
@@ -227,7 +228,7 @@ index 44274016a4cf..27cccab98c8e 100644
  
  bsd/miscfs/routefs/routefs_ops.c	optional routefs
  
-@@ -361,6 +452,7 @@ bsd/security/audit/audit_syscalls.c		standard
+@@ -361,6 +453,7 @@ bsd/security/audit/audit_syscalls.c		standard
  bsd/security/audit/audit_worker.c		optional config_audit
  
  bsd/pthread/pthread_shims.c		standard
@@ -235,7 +236,7 @@ index 44274016a4cf..27cccab98c8e 100644
  bsd/pthread/pthread_priority.c		standard
  bsd/pthread/pthread_workqueue.c		standard
  
-@@ -383,6 +475,7 @@ bsd/kern/kern_debug.c			standard
+@@ -383,6 +476,7 @@ bsd/kern/kern_debug.c			standard
  bsd/kern/kern_symfile.c			standard
  bsd/kern/kern_descrip.c			standard
  bsd/kern/kern_guarded.c			standard
@@ -2250,6 +2251,19 @@ index e26a1d70f470..f91095c98d26 100644
  
  #if APPLE_ARM64_ARCH_FAMILY
  	configure_late_apple_regs();
+diff --git a/osfmk/arm/io_map.c b/osfmk/arm/io_map.c
+index 18ef2f02122f..e4d5a684537c 100644
+--- a/osfmk/arm/io_map.c
++++ b/osfmk/arm/io_map.c
+@@ -62,7 +62,7 @@
+ 
+ extern vm_offset_t virtual_space_start;     /* Next available kernel VA */
+ 
+-#define IO_MAP_SIZE            (8ul << 20)
++#define IO_MAP_SIZE            (32ul << 20)
+ 
+ __startup_data static struct mach_vm_range io_range;
+ static SECURITY_READ_ONLY_LATE(vm_map_t) io_submap;
 diff --git a/osfmk/arm/model_dep.c b/osfmk/arm/model_dep.c
 index 39daaf8db949..64ceb1a5f201 100644
 --- a/osfmk/arm/model_dep.c
@@ -2998,6 +3012,26 @@ index 384118e8d7a9..2573d2ebd4e6 100644
  				 * Framebuffers would normally use VM_WIMG_RT, which
  				 * io_map doesn't support.  However this buffer is set up
  				 * by the bootloader and doesn't require D$ cleaning, so
+diff --git a/osfmk/console/video_scroll.c b/osfmk/console/video_scroll.c
+index 439787daa518..81f9d171981b 100644
+--- a/osfmk/console/video_scroll.c
++++ b/osfmk/console/video_scroll.c
+@@ -32,7 +32,7 @@
+ void
+ video_scroll_up(void * start, void * end, void * dest)
+ {
+-	bcopy(start, dest, ((char *)end - (char *)start) << 2);
++	bcopy(start, dest, (size_t)((char *)end - (char *)start));
+ }
+ 
+ void
+@@ -40,5 +40,5 @@ video_scroll_down(void * start,      /* HIGH addr */
+     void * end,                      /* LOW addr */
+     void * dest)                     /* HIGH addr */
+ {
+-	bcopy(end, dest, ((char *)start - (char *)end) << 2);
++	bcopy(end, dest, (size_t)((char *)start - (char *)end));
+ }
 diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
 index 0a00656a0fdd..bfad3cbca5bc 100644
 --- a/osfmk/kern/debug.c
@@ -3104,6 +3138,28 @@ index 4fb223ee9788..df563bc04910 100644
  
  #pragma mark - implementation details
  
+diff --git a/osfmk/kern/printf.c b/osfmk/kern/printf.c
+index e44008f87953..75954130ce8b 100644
+--- a/osfmk/kern/printf.c
++++ b/osfmk/kern/printf.c
+@@ -917,7 +917,7 @@ consdebug_putc(char c)
+ 
+ 	debug_putc(c);
+ 
+-	if (!console_is_serial() && !disable_serial_output) {
++	if (!console_is_serial() && !disable_serial_output && PE_kputc != console_write_unbuffered) {
+ 		PE_kputc(c);
+ 	}
+ }
+@@ -931,7 +931,7 @@ consdebug_putc_unbuffered(char c)
+ 
+ 	debug_putc(c);
+ 
+-	if (!console_is_serial() && !disable_serial_output) {
++	if (!console_is_serial() && !disable_serial_output && PE_kputc != console_write_unbuffered) {
+ 		PE_kputc(c);
+ 	}
+ }
 diff --git a/osfmk/kern/sched.h b/osfmk/kern/sched.h
 index a5f68ade084b..9741eb1b3ecd 100644
 --- a/osfmk/kern/sched.h

@@ -1,8 +1,7 @@
 # Installing HakiOS on a phone: the design, and what is missing
 
-**Nothing in this document has been run on a phone.** The pieces it names exist and are tested one by one (in QEMU,
-against stand-in programs, by their own self-tests). The whole chain has not been tried, and the attached phone was
-not on USB while this was written. Read it as the safety model that an install has to meet, not as instructions.
+**Nothing in this document has been run on a phone.** The pieces it names exist and are tested against stand-in programs and self-tests.
+Read it as the safety model that an install has to meet, not as instructions.
 
 ## Today
 
@@ -17,9 +16,9 @@ CI fails if another writer appears.
 Android stays, HakiOS sits beside it and is chosen at boot, and going back is a slot switch. Two things have to live
 on the phone:
 
-1. **The boot chain.** The boot image `./xl enter` builds (`mkxnuimg.py`: Project Silicium's UEFI, the shim and a
-   payload) already starts with no host: the shim puts the payload in memory and the loader runs it, in one-shot mode
-   when the payload carries no `usb` entry. Installed, that same kind of image would sit in the boot partition of the
+1. **The boot chain.** The boot image `tools/mkubootimg.py` builds (U-Boot, `xnuloader`, and a payload) already starts with no host:
+   U-Boot loads the payload from its HKUB ramdisk container and runs the loader in one-shot mode when the payload carries no `usb` entry.
+   Installed, that same kind of image would sit in the boot partition of the
    **inactive** slot.
 2. **The system.** The partition `darwin`, cut off the end of Android's userdata once
    (`tools/userdata-carve.py` prints the plan and says what it does to Android's data), written by
@@ -49,7 +48,7 @@ Each one is how the project already treats writes (`darwin-write.py`, the loader
 
 | Needed | State |
 |---|---|
-| A boot image that starts with no host (shim + payload) | exists (`mkxnuimg.py`); the loader started from it by `fastboot boot` on the attached phone |
+| A boot image that starts with no host (U-Boot + payload) | exists (`tools/mkubootimg.py`); the loader started from it by `fastboot boot` on the attached phone |
 | A guarded writer for `darwin` | exists (`tools/darwin-write.py`); its self-test refuses the wrong partition |
 | A plan for carving `darwin` | exists (`tools/userdata-carve.py`, prints the commands, writes nothing) |
 | Read-only preflight | exists (`make doctor`): slots, `darwin`, firmware, root, bootloader as reported |

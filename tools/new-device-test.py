@@ -21,8 +21,8 @@ sys.path.insert(0, HERE)
 from fdtbuild import cells, compat, fdt  # noqa: E402
 
 TOOL = os.path.join(HERE, "new-device.py")
-REFERENCE_DTB = os.path.join(ROOT, "devices", "redwood", "prebuilt", "device-tree.dtb")
-REFERENCE_ARGS = os.path.join(ROOT, "devices", "redwood", "soc.args")
+REFERENCE_DTB = os.path.join(ROOT, "devices", "avalon", "prebuilt", "device-tree.dtb")
+REFERENCE_ARGS = os.path.join(ROOT, "devices", "avalon", "soc.args")
 failures = []
 
 
@@ -53,7 +53,7 @@ try:
           sorted(os.listdir(out)) == ["README.md", "pull-soc.sh", "soc.args"], str(sorted(os.listdir(out))))
     readme = open(os.path.join(out, "README.md"), encoding="utf-8").read()
     check("the reference tree: README names the board and carries the checklist",
-          "Yupik" in readme and "- [ ] **Cellular**" in readme and "the same as the reference" in readme)
+          "Cliffs" in readme and "- [ ] **Cellular**" in readme and "the same as the reference" in readme)
 
     # 2. another SoC: an IPCC at the usual place, the AOSS mailbox elsewhere, nothing else
     other = fdt({"": ({"model": b"Some Phone\0", "compatible": compat("vendor,some-phone", "qcom,sm9999")},

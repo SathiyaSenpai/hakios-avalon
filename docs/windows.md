@@ -31,11 +31,9 @@ from Git Bash.
 - Turn on USB debugging. Unlock the bootloader (yours to do; it wipes the phone).
 - **Trust the device tree, not the product name.** Some units report a different brand and model than
   the board they really are (root-hiding modules fake the identity and even the bootloader's
-  "locked" state). `tools/doctor.sh` prints both. The supported platform is `redwood` / SM7325.
-- **Firmware needs root on some ROMs.** If `devices/redwood/pull-firmware.sh` reports every file
-  "not on the phone" but `doctor` says the firmware is readable only by root, use
-  `devices/redwood/pull-firmware-root.sh`. It copies under `su` to a staging directory, pulls, and
-  removes the staging directory; nothing on the phone is changed.
+  "locked" state). `tools/doctor.sh` prints both. The supported platform is `avalon` / SM7675 (OnePlus Nord 4).
+- **Firmware extraction:** `devices/avalon/pull-firmware.sh` extracts Synaptics S3910 touch and GPU firmware
+  from local vendor dumps into `fw-*/` without modifying the phone.
 
 ## Build and run
 

@@ -41,7 +41,7 @@
 #               the small one the firmware starts on (the loader then watches from the first core, and a
 #               kernel that hangs still gets its log out); cpufreq=1 sets that core to its top speed;
 #               touchscreen=1 turns the touch screen on.
-#   XL_RAMDISK  the image sent with the kernel: the small one that is mounted on /redwood
+#   XL_RAMDISK  the image sent with the kernel: the small one that is mounted on /avalon
 #               (default userland/root.apfs; "none" sends none). Without a system image in the
 #               phone's RAM it is the root itself (e.g. XL_RAMDISK=userland/hello).
 # One phone, several working copies: a run holds a lock, and `stop` and `reboot` from another working
@@ -56,6 +56,7 @@ cd "$(dirname "$(readlink -f "$0")")" || exit 1
 # On a Mac: flock, GNU timeout and stat, and Android's platform-tools, from tools/macos-bin (see its README)
 [ "$(uname)" = Darwin ] && PATH=$PWD/tools/macos-bin:$PWD/tools/macos-bin/platform-tools:$PATH
 # the kernel and the loader built here, or else the ones that come with the repository
+DEVICE=${DEVICE:-avalon}
 K=hakios-kernel                 # make kernel makes it
 [ -f $K ] || K=prebuilt/hakios-kernel
 L=xnuloader/loader.efi
@@ -121,18 +122,9 @@ recover_phone() {
 	return 1
 }
 
-# What the phone's bootloader starts the loader with: Project Silicium's UEFI (mkxnuimg.py) or HakiOS's U-Boot
-# (tools/mkubootimg.py, docs/u-boot.md). XL_FIRMWARE says which; without it, Silicium's when its image has been built
-# (it is made from the phone's own vendor drivers and is not in the repository), else U-Boot's.
+# What the phone's bootloader starts the loader with: HakiOS's U-Boot (tools/mkubootimg.py, docs/u-boot.md).
 firmware() {
-	case "${XL_FIRMWARE:-}" in
-	u-boot|silicium) echo "$XL_FIRMWARE"; return ;;
-	esac
-	if [ -f Mu-Silicium/Build/redwoodPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd ] || [ -f devices/redwood/prebuilt/SILICIUM_UEFI.fd ]; then
-		echo silicium
-	else
-		echo u-boot
-	fi
+	echo "${XL_FIRMWARE:-u-boot}"
 }
 
 enter() {
@@ -146,15 +138,19 @@ enter() {
 		enter; return ;;
 	esac
 	xnuloader/mkpayload.py -o usb-payload.bin loader.efi=$L --usb >/dev/null || { echo "xl: payload build failed"; return 1; }
-	case "$(firmware)" in
-	u-boot) tools/mkubootimg.py -d "${DEVICE:-redwood}" -l $L -p usb-payload.bin -o xnu-usb.img >/dev/null ;;
-	*) ./mkxnuimg.py -p usb-payload.bin -o xnu-usb.img >/dev/null ;;
-	esac || { echo "xl: image build failed ($(firmware))"; return 1; }
+	tools/mkubootimg.py -d "$DEVICE" -l $L -p usb-payload.bin -c usb.hkub -o xnu-usb.img >/dev/null || { echo "xl: image build failed ($(firmware))"; return 1; }
 	# Right after the phone enters fastboot the first "boot" is sometimes not taken: try twice.
 	local try
 	for try in 1 2; do
 		FB_TIMEOUT=40 fb boot xnu-usb.img | grep -q OKAY || { sleep 3; continue; }
 		sleep 6
+		if [ "$DEVICE" = "avalon" ]; then
+			wait_for fastboot 15 || true
+			fb stage usb.hkub >/dev/null 2>&1 || true
+			fb oem run:hakios load fastboot >/dev/null 2>&1 || true
+			fb continue >/dev/null 2>&1 || true
+			sleep 4
+		fi
 		wait_for loader 30 && { rm -f $PHONE.ran; return 0; }
 		[ "$(state)" = fastboot ] || break
 	done
@@ -208,7 +204,11 @@ run() { # run <oem command> <label>
 		fi
 		# A run about Wi-Fi is given the radio's own address, which is this phone's and so is kept in a
 		# file that is not in the repository: fw-wifi/mac, one line, six bytes in hexadecimal with colons.
-		local args=${XL_CMDLINE--v}
+		local default_args="-v"
+		if [ "$DEVICE" = "avalon" ]; then
+			default_args="-v cpus=8 bootcpu=7 cpufreq=1 ddr=2 ufs=2 modem=1 socinfo=1 thermal=1 thermal_stop=95 pmic=1 battery=1 buttons=1 touchscreen=1 touch_s3910=1 touch_debug=1 fb_hz=120 fbscale=2 fb_threads=4"
+		fi
+		local args=${XL_CMDLINE:-$default_args}
 		case " $args " in
 		*" wifi="*|*" wifi_step="*) [ -s fw-wifi/mac ] && args="$args wifi_mac=$(tr -d ' \n\r' < fw-wifi/mac)" ;;
 		esac

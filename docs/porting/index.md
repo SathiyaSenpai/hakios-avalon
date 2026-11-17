@@ -9,7 +9,7 @@ configuration, then a boot with nothing of the phone's, then the drivers one at 
 
 ## What you need
 
-- a phone with an ARM64 Qualcomm SoC, its boot loader unlocked; a UEFI port for it (a Mu-Silicium port, as `devices/redwood/uefi` is, or your own);
+- a phone with an ARM64 Qualcomm SoC, its boot loader unlocked; a U-Boot / UEFI port for it (`devices/avalon/u-boot/` is HakiOS's U-Boot port);
 - the phone's own device tree (`adb shell` with root, or from its boot image) and its Android running, for the firmware;
 - a machine that builds the kernel ([Building from source](../getting-started/building.md)).
 
@@ -17,7 +17,7 @@ configuration, then a boot with nothing of the phone's, then the drivers one at 
 
 ```sh
 adb pull /sys/firmware/fdt device-tree.dtb          # the tree of the phone's own Android (or --adb below, which pulls it)
-tools/hakios-device.py new mydevice --soc sc7280 --title "My Phone" --vendor Someone --maintainer "you" --fdt device-tree.dtb
+tools/hakios-device.py new mydevice --soc cliffs --title "My Phone" --vendor Someone --maintainer "you" --fdt device-tree.dtb
 make mydevice_defconfig
 make config
 ```
@@ -29,10 +29,10 @@ That makes `devices/mydevice/` with:
   as the reference: the SoC code already fits. Differences go to the kernel through `soc.args`;
 - `device.conf`, a defconfig of three `#include` lines and a fragment in which **every phone driver of the common repository is
   left out**: their addresses, pins and rails are the phone they were written for, and a driver of another phone touching yours
-  is the last thing you want. The drivers of your SoC (from its fragment) and QEMU's stay in.
+  is the last thing you want. The drivers of your SoC (from its fragment) stay in.
 
 The SoC's layer comes with the device, in `devices/mydevice/soc/`: a copy of the one another device carries when the SoC is one
-HakiOS knows (`--soc sc7280` copies redwood's), or a new one to fill in for a SoC nobody has ported yet (`--soc sm8250
+HakiOS knows (`--soc cliffs` copies avalon's), or a new one to fill in for a SoC nobody has ported yet (`--soc sm8250
 --soc-title "Snapdragon 865"`). `--repo` makes the directory a git repository, ready to push as `hakios-mydevice`.
 
 **Done when** `tools/hakios-device.py check mydevice` says it holds together, and the README says which SoC values differ and you
@@ -97,10 +97,10 @@ The window server's Metal path is built for one GPU and one display controller s
   Adreno starts there, with Mesa's `freedreno_devices.py`.
 - **The scan.** `fb_beam` (frames written behind the panel's scan) and `fb_measure` read the display interface's registers.
   They are known for `sc7280`; on another SoC nothing is read and frames go on their beat. `fb_intf=PHYSICAL` names them,
-  from Linux's catalogue for your SoC. `fb_beam` checks that they count like a line counter before it trusts them.
+  from Linux's catalogue for your SoC (`0x0ae36000` for SM7675 Cliffs DSI0). `fb_beam` checks that they count like a line counter before it trusts them.
 - **The run.** `tools/metal-run.sh` reads `devices/<your phone>/metal.args`, which `tools/hakios-device.py new` makes: its big core,
-  its cores, its panel's rate and its touch poll, for instance `bootcpu=7 cpus=8 fb_hz=60 fb_threads=4 touch_poll_us=8000`.
-  `DEVICE_ARGS=` overrides it for one run. Without either, a phone other than redwood gets `fb_hz=60 fb_threads=3`.
+  its cores, its panel's rate and its touch poll, for instance `bootcpu=7 cpus=8 fb_hz=120 fb_threads=4 touch_poll_us=4000`.
+  `DEVICE_ARGS=` overrides it for one run. Without either, a phone other than `avalon` gets `fb_hz=60 fb_threads=3`.
 - **The picture.** Any panel is stretched to from the screen class chosen: `fbscale=`, or `fbwidth=`, `fbheight=`, `fbsubtype=`.
 
 ## When a step does not work

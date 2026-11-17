@@ -129,9 +129,9 @@ typedef struct efi_gop {
 } efi_gop;
 
 /*
- * Qualcomm's open ChargerEx protocol.  The protocol is implemented by the
- * stock ChargerExDxe in the redwood UEFI image and is safe to use for
- * read-only charger/battery queries while boot services remain resident.
+ * Qualcomm's open ChargerEx protocol.  The protocol is implemented by
+ * ChargerExDxe on Qualcomm UEFI platforms when present and is safe to use
+ * for read-only charger/battery queries while boot services remain resident.
  */
 typedef struct {
 	uint64_t revision;
@@ -143,9 +143,7 @@ typedef struct {
 } efi_charger_ex;
 
 /*
- * The first public entries of Xiaomi's Qualcomm charger protocol.  Its GUID,
- * revision and function layout are taken from the QcomChargerDxeLA.efi and
- * QcomChargerApp.efi shipped in this repository.  get_charging_action is used
+ * The first entries of Qualcomm's QcomCharger protocol. `get_charging_action` is used
  * only as a status read: the loader never calls take_action and therefore does
  * not change current/voltage limits or bypass the firmware's JEITA checks.
  */

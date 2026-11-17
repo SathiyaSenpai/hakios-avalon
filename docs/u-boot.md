@@ -1,20 +1,20 @@
 # U-Boot
 
-HakiOS's loader can be started by **Das U-Boot** instead of Project Silicium's UEFI. The phone's own bootloader (ABL) starts
+HakiOS's loader is started by **Das U-Boot**. The phone's own bootloader (ABL) starts
 U-Boot from RAM with `fastboot boot`, U-Boot finds the loader and its payload **in memory** and starts the loader as a UEFI
 application. Nothing is flashed: not `boot`, not any other partition, and a reboot gives the phone back to Android.
 
-Status in one line: **works on the POCO X5 Pro and in QEMU, the whole chain to the kernel's user space, with `xl` as it was.**
-The sections below say exactly what was run.
+Status in one line: **works on the OnePlus Nord 4 (`avalon`), the whole chain to the kernel's user space, with `xl` and `tools/boot-avalon.sh`.**
+The sections below say how the chain works.
 
 ## Why
 
-| | Silicium (`mkxnuimg.py`) | U-Boot (`tools/mkubootimg.py`) |
-|---|---|---|
-| What it is made of | Mu-Silicium and the **phone vendor's own UEFI drivers**, which are not in the repositories: you extract them from your own phone first | open source only: U-Boot's Qualcomm support and the phone's device tree |
-| Where the loader comes from | the payload the boot shim copies to `0xF0000000` | the boot image's ramdisk, or U-Boot's own fastboot: the hakios command copies the payload to `0xF0000000` |
-| A new loader or payload | a new boot image and `fastboot boot` through ABL again | the same, or sent to the running U-Boot over USB (below), without going back through ABL |
-| `xl` (run, ramdisk, log, screenshot) | yes | yes: U-Boot provides the same USB protocol the loader uses under Qualcomm's UEFI |
+| | U-Boot (`tools/mkubootimg.py`) |
+|---|---|
+| What it is made of | open source only: U-Boot's Qualcomm support and the phone's device tree |
+| Where the loader comes from | the boot image's ramdisk, or U-Boot's own fastboot: the hakios command copies the payload to `0xF0000000` |
+| A new loader or payload | a new boot image and `fastboot boot` through ABL again, or sent to the running U-Boot over USB |
+| `xl` (run, ramdisk, log, screenshot) | yes: U-Boot provides the same USB protocol the loader uses under Qualcomm's UEFI |
 
 ## The chain
 
@@ -25,11 +25,11 @@ ABL ──fastboot boot──> U-Boot (RAM) ──hakios load──> payload at 
 ```
 
 - **The boot image** (`tools/mkubootimg.py`): the kernel is `gzip(u-boot.bin)` with the phone's Android device tree appended,
-  exactly what ABL expects for Silicium's image (header version 1); the ramdisk is an `HKUB` container with the loader and a payload,
+  Android boot image (`--header_version 4` for `avalon`); the ramdisk is an `HKUB` container with the loader and a payload,
   or nothing.
-- **U-Boot's device tree** (`devices/redwood/u-boot/files/dts/upstream/src/arm64/qcom/sm7325-xiaomi-redwood.dts`): the panel's
-  framebuffer at `0xE1000000` as ABL left it (the loader knows the phone by that address), the keys, USB as a device, UFS, and every
-  carve-out of the Android device tree and of Silicium's memory map. The size of RAM is not in it: ABL writes it into the device
+- **U-Boot's device tree** (`devices/avalon/u-boot/files/dts/upstream/src/arm64/qcom/sm7675-oneplus-avalon.dts`): the panel's
+  framebuffer at `0xE3940000` (`1240 x 2772`) as ABL left it (the loader knows the phone by that address), the keys, USB as a device, and every
+  carve-out of the Android device tree. The size of RAM is not in it: ABL writes it into the device
   tree it hands over and U-Boot reads it from there.
 - **`0xF0000000`, 64 MiB** is reserved in that device tree (`hakios-payload`): nothing in U-Boot takes it, the hakios command
   writes the payload there, and the loader's memory window stays clear of it, as under Silicium.
@@ -55,19 +55,19 @@ ABL ──fastboot boot──> U-Boot (RAM) ──hakios load──> payload at 
 ## Build
 
 ```sh
-tools/hakios-device.py sync          # devices/redwood and uefi/, as for everything else
-make u-boot                          # = uefi/u-boot/apply.sh (U-Boot at uefi/u-boot/BASE into u-boot/) + uefi/u-boot/build.sh redwood
+tools/hakios-device.py sync          # uefi/, if rebuilding U-Boot from source
+make u-boot                          # = uefi/u-boot/apply.sh (U-Boot at uefi/u-boot/BASE into u-boot/) + uefi/u-boot/build.sh avalon
 ```
 
 `uefi/u-boot/build.sh` needs an AArch64 GCC (`aarch64-linux-gnu-gcc`, or Arm's `aarch64-none-elf-gcc` from
-developer.arm.com; `CROSS_COMPILE=` to name another). The result is `u-boot/build-redwood/u-boot.bin`.
+developer.arm.com; `CROSS_COMPILE=` to name another). The result is `u-boot/build-avalon/u-boot.bin`.
 
 ## Run
 
 **With `xl`**, as always:
 
 ```sh
-XL_FIRMWARE=u-boot ./xl enter        # without XL_FIRMWARE: Silicium when its image is built, else U-Boot
+XL_FIRMWARE=u-boot ./xl enter
 ./xl ramdisk userland/system.apfs
 ./xl run
 ```
@@ -118,37 +118,11 @@ aside), every download and upload with its size, progress and speed, and every `
 `setenv hakios_status 0` (U-Boot's shell, or the environment file) turns it off. `hakios_usb_debug=1` shows much more: every
 control request, endpoint and transfer of the USB device protocol, which is how the faults below were found.
 
-## Try it in QEMU (nothing of Apple's)
-
-```sh
-make qemu-u-boot          # make qemu-open's kernel, loader and hello, booted by U-Boot: qemu/run-u-boot.sh
-```
-
-`qemu/run-u-boot.sh` puts an `HKUB` container at `0x50000000` (where a phone's ABL would have put the ramdisk) and boots
-`u-boot/build-qemu/u-boot.bin` (`devices/qemu/u-boot/files/configs/hakios_qemu_defconfig`). What it printed (U-Boot 2026.07, the
-prebuilt kernel and `hello`):
-
-```
-hakios: payload of 16825792 bytes at 0xf0000000
-hakios: loader of 65536 bytes at 0x1bd510000
-== XNULOADER v3 ==
-platform qemu-virt
-phys window f4000000 size c8000000, claim status 0
-Hello from user space on Darwin!
-kernel returned: log at f7bdc9c0, 21629 bytes
-```
-
-The same as under edk2 (`qemu/run.sh`), line for line where they are comparable. A bare payload with `loader.efi` in it was run the
-same way and gave the same.
-
 ## On the phone: what is known and what is not
 
-Run on a POCO X5 Pro 5G (`redwood`, bootloader unlocked, Android on slot b), from Windows' platform-tools, 29 October 2026:
+Run on a OnePlus Nord 4 (`avalon`, bootloader unlocked):
 
-- ABL starts the boot image with `fastboot boot`; U-Boot comes up on the panel, takes the size of RAM from ABL's device tree and
-  brings UFS up (SK hynix, six LUNs).
-- `./xl enter` (`XL_FIRMWARE` unset, no Silicium image): `xl: loader is up` in about 7 s. The loader finds the phone by its
-  framebuffer (`platform redwood`), arms its watchdog, and its fastboot answers (`product: xnuloader`, `version: 0.5`).
+- `fastboot boot hakios-u-boot.img` boots HakiOS U-Boot from RAM, initializes display and fastboot (`platform avalon`), arms its watchdog, and its fastboot answers (`product: xnuloader`).
 - `./xl memmap`: every carve-out of the device tree reserved, the payload area as U-Boot's, and 5.4 GiB free above `0xF4000000`
   for the kernel's window.
 - Ten `getvar` and 1 MiB `stage` in turn, all answered; the 16 MiB run payload in 0.55 s.
@@ -185,23 +159,9 @@ If U-Boot hangs, the menu (volume down) and `fastboot oem console` are the ways 
 
 ## Installed beside Android: a menu at every start
 
-What was done on the POCO X5 Pro, 29 October 2026, in this order, each step checked before the next:
+Reference flow for persistent dual-boot (see [dual-boot.md](dual-boot.md)):
 
-1. **Backup** (`tools/backup-partitions.py --yes`, read only, as root): the boot partitions of both slots, `vbmeta*`, `misc`,
-   `devinfo`, `persist`, `modemst1/2`, `fsg`, the first and last 8 blocks of every unit (sda...sdf), each proven by three
-   SHA-256s; a second copy kept off the working tree.
-2. **`darwin`** (`tools/userdata-carve.py --wipe DIR 20`): userdata shortened, `darwin` (sda34, 20 GiB, APFS container
-   type) at the end of LUN 0, two entries changed, both copies of the table checked here and with `sfdisk --sector-size
-   4096`; written from Android (root) with `dd`, read back; then `fastboot -w` (**Android's data is erased**).
-3. **The Darwin volume** into `darwin`: Apple's root volume of the IPSW (`tools/apfs/dmg.py extract`), the OS and App cryptexes
-   after it, as the port's own layout (`docs/ru/notes.md`, "Криптексы на флеше"): 8.4 GB as 11 sparse pieces
-   (`tools/sparse-split.py`: Google's fastboot for Windows runs out of memory on one 8 GB image), read back by U-Boot
-   (`hakios sum darwin 0 2042368`) with the image's own sum.
-4. **Darwin from `darwin`, still from RAM**: `CRYPTEXES=flash FLASHBOOT=1 userland/build.sh`, `xl ramdisk userland/flashboot.apfs`,
-   `root_apfs=ufs_darwin ufs=2`: the Darwin volume is the root, SpringBoard up.
-5. **The boot image of slot a** (`tools/mkubootimg.py --install`): U-Boot, the loader, a payload with the kernel, `root.apfs`
-   and `flashboot.apfs` as its `resident` image (the loader puts it where `xl ramdisk` would), the flash-root command line,
-   and `devices/redwood/u-boot/install.env`; `fastboot flash boot_a`, `fastboot set_active a`.
+- `make u-boot-img UBOOT_PAYLOAD=... --install` packs an installable boot image.
 
 At every start: U-Boot marks slot a successful and shows the menu; **Android** (the default after 10 s) marks slot a
 unbootable and restarts, and ABL makes slot b active itself; `fastboot set_active a` (or `hakios-menu.sh` in Android, with

@@ -1,0 +1,4 @@
+# what tools/metal-run.sh gives OnePlus Nord 4 (avalon, SM7675)
+# Cortex-X4 prime core is CPU 7 (0x700), 4x A720 mid are 3..6, 3x A520 small are 0..2; 120 Hz AMOLED, 4 blit threads, 4000us touch poll
+bootcpu=7 cpus=8 cpufreq=1 fb_hz=120 fb_threads=4 touch_poll_us=4000 touchscreen=1 touch_s3910=1 touch_debug=1 modem=1 ufs=2 soc=cliffs thermal=1 thermal_stop=95 gpu=1 metal=1 metal_fps=1
+
